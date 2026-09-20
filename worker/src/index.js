@@ -128,7 +128,7 @@ export default {
         request.method === "PATCH"
       ) {
         if (!isAuthorized(request, env)) {
-          return json({ ok: false, error: "Unauthorized" }, 401);
+          return json({ ok: false, error: "Unauthorized: invalid or missing X-Sync-Key" }, 401);
         }
 
         const id = positiveInteger(url.pathname.split("/")[4]);
@@ -156,7 +156,7 @@ export default {
         request.method === "PATCH"
       ) {
         if (!isAuthorized(request, env)) {
-          return json({ ok: false, error: "Unauthorized" }, 401);
+          return json({ ok: false, error: "Unauthorized: invalid or missing X-Sync-Key" }, 401);
         }
 
         const id = positiveInteger(url.pathname.split("/").pop());
@@ -301,7 +301,7 @@ export default {
       if (url.pathname === "/api/sync/menu" && request.method === "POST") {
         const syncKey = request.headers.get("X-Sync-Key") || "";
         if (!env.SYNC_KEY || !syncKey || syncKey !== env.SYNC_KEY) {
-          return json({ ok: false, error: "Unauthorized" }, 401);
+          return json({ ok: false, error: "Unauthorized: invalid or missing X-Sync-Key" }, 401);
         }
 
         const body = await request.json();
@@ -334,7 +334,7 @@ export default {
           const category = String(item.category ?? item.scatename ?? "").trim();
           const dine = Number(item.dine_in_price ?? item.price ?? 0);
           const take = Number(item.takeaway_price ?? item.takeprice ?? 0);
-          const forceUnavailable = /@#$/.test(name) || name.endsWith("@#");
+          const forceUnavailable = name.endsWith("@#");
 
           if (!Number.isInteger(sourceId) || sourceId <= 0) {
             return json({ ok: false, error: `Invalid source_item_id: ${item.source_item_id}` }, 400);
@@ -564,7 +564,7 @@ export default {
       // Protected orders list
       if (url.pathname === "/api/orders" && request.method === "GET") {
         if (!isAuthorized(request, env)) {
-          return json({ ok: false, error: "Unauthorized" }, 401);
+          return json({ ok: false, error: "Unauthorized: invalid or missing X-Sync-Key" }, 401);
         }
 
         const status = url.searchParams.get("status");
@@ -607,7 +607,7 @@ export default {
         request.method === "GET"
       ) {
         if (!isAuthorized(request, env)) {
-          return json({ ok: false, error: "Unauthorized" }, 401);
+          return json({ ok: false, error: "Unauthorized: invalid or missing X-Sync-Key" }, 401);
         }
 
         const orderId = positiveInteger(url.pathname.split("/")[3]);
@@ -637,7 +637,7 @@ export default {
       // Protected single order
       if (/^\/api\/orders\/\d+$/.test(url.pathname) && request.method === "GET") {
         if (!isAuthorized(request, env)) {
-          return json({ ok: false, error: "Unauthorized" }, 401);
+          return json({ ok: false, error: "Unauthorized: invalid or missing X-Sync-Key" }, 401);
         }
 
         const orderId = positiveInteger(url.pathname.split("/").pop());
@@ -663,7 +663,7 @@ export default {
       // Protected order update
       if (/^\/api\/orders\/\d+$/.test(url.pathname) && request.method === "PATCH") {
         if (!isAuthorized(request, env)) {
-          return json({ ok: false, error: "Unauthorized" }, 401);
+          return json({ ok: false, error: "Unauthorized: invalid or missing X-Sync-Key" }, 401);
         }
 
         const orderId = positiveInteger(url.pathname.split("/").pop());
