@@ -46,6 +46,8 @@ function positiveInteger(value) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+      // Keep the database authoritative: names ending in @# are always unavailable.
+      try { await env.DB.prepare("UPDATE menu_items SET is_available = 0 WHERE rtrim(name_en) LIKE '%@#' AND is_available != 0").run(); } catch (e) { console.warn("@# availability enforcement skipped:", e); }
 
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders });
@@ -87,7 +89,7 @@ export default {
         }
 
         if (available === "1" || available === "true") {
-          sql += ` AND is_available = 1`;
+          sql += ` AND is_available = 1 AND rtrim(name_en) NOT LIKE '%@#'`;
         }
 
         sql += `

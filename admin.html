@@ -731,6 +731,30 @@ window.cloudflareDB={createClient(){return {from:t=>new Q(t),storage,auth,channe
 <script>
         const CLOUDFLARE_API = 'https://pos-menu.prokashofficial-kolkata.workers.dev';
 const db=cloudflareDB.createClient();
+// MENU AVAILABILITY RULES: an item whose name ends with @# is permanently unavailable.
+// Database values are stored as 1/0; this helper treats only true/1 as available.
+function menuItemHasUnavailableMarker(item){
+  const name=String(item?.name_en ?? item?.name ?? item?.item_name ?? '').trimEnd();
+  return name.endsWith('@#');
+}
+function menuItemIsAvailable(item){
+  const v=item?.is_available;
+  return v===true || v===1 || v==='1' || v==='true';
+}
+async function enforceMenuAvailabilityMarkers(items, client){
+  const rows=Array.isArray(items)?items:[];
+  const marked=rows.filter(menuItemHasUnavailableMarker);
+  const ids=marked.filter(menuItemIsAvailable).map(x=>x.id).filter(x=>x!==undefined&&x!==null);
+  if(ids.length && client){
+    try{
+      const r=await client.from('menu_items').update({is_available:false}).in('id',ids);
+      if(r?.error) console.warn('Could not mark @# menu items unavailable:',r.error);
+    }catch(e){ console.warn('Could not mark @# menu items unavailable:',e); }
+  }
+  marked.forEach(x=>{x.is_available=false;});
+  return rows;
+}
+
 const MENU_TABLE='menu_items', CLOSE_TABLE='shift_closures', ATT_TABLE='attendance', PROFILE_TABLE='profiles', INVOICE_TABLE='invoices', ORDER_ITEM_TABLE='order_items', ORDER_TABLE='orders', MENU_BUCKET='menu-images';
 const KITCHEN_TABLE='kitchen_sections', KITCHEN_CATEGORY_TABLE='kitchen_section_categories', APP_SETTING_TABLE='app_settings';
 let session=null, menuData=[], profiles=[], currentReportType='SHIFT', categoryChart=null, menuColumns=new Set(), profileColumns=new Set(), customerOrderingEnabled=true;
@@ -1031,7 +1055,7 @@ function renderCategoryChart(labels,values){
 
 function parseCSV(text){const rows=[];let row=[],cell='',quote=false;for(let i=0;i<text.length;i++){const c=text[i];if(c==='"'){if(quote&&text[i+1]==='"'){cell+='"';i++}else quote=!quote}else if(c===','&&!quote){row.push(cell);cell=''}else if((c==='\n'||c==='\r')&&!quote){if(c==='\r'&&text[i+1]==='\n')i++;row.push(cell);cell='';if(row.some(v=>v.trim()!==''))rows.push(row);row=[]}else cell+=c}if(cell!==''||row.length){row.push(cell);rows.push(row)}if(!rows.length)return[];const headers=rows.shift().map(h=>h.trim().toLowerCase());return rows.map(r=>Object.fromEntries(headers.map((h,i)=>[h,(r[i]??'').trim()]))).filter(r=>Object.values(r).some(Boolean))}
 function normalizeCSVRow(r){const get=(...keys)=>{for(const k of keys)if(r[k]!==undefined)return r[k];return ''};return{name_en:get('name_en','name','item_name'),category:get('category'),dine_in_price:get('dine_in_price','price','dine in price','dinein_price'),takeaway_price:get('takeaway_price','take away price','takeaway')};}
-async function loadMenu(){const {data,error}=await db.from(MENU_TABLE).select('*').limit(5000);if(error){document.getElementById('menuItems').innerHTML='<div class="card p-4 text-red-600">'+esc(error.message)+'</div>';return}menuData=(data||[]).slice().sort((a,b)=>
+async function loadMenu(){const {data,error}=await db.from(MENU_TABLE).select('*').limit(5000);if(error){document.getElementById('menuItems').innerHTML='<div class="card p-4 text-red-600">'+esc(error.message)+'</div>';return}await enforceMenuAvailabilityMarkers(data||[],db);menuData=(data||[]).filter(menuItemIsAvailable).filter(x=>!menuItemHasUnavailableMarker(x)).slice().sort((a,b)=>
   (Number(a.category_sort_order)||999999)-(Number(b.category_sort_order)||999999) ||
   String(a.category||'').localeCompare(String(b.category||''),undefined,{numeric:true,sensitivity:'base'}) ||
   (Number(a.item_sort_order)||999999)-(Number(b.item_sort_order)||999999) ||
@@ -1248,7 +1272,7 @@ function renderCategoryOrderManager(){
 
   box.innerHTML=cats.map((cat,i)=>{
     const items=menuData.filter(m=>(String(m.category||'Uncategorized').trim()||'Uncategorized')===cat);
-    const categoryOn=items.some(m=>m.is_available!==false);
+    const categoryOn=items.some(m=>menuItemIsAvailable(m));
     const safeCat=encodeURIComponent(cat);
 
     return `
@@ -1433,7 +1457,8 @@ async function loadCategoryManagement(){
     return;
   }
 
-  menuData=(data||[]).slice().sort((a,b)=>
+  await enforceMenuAvailabilityMarkers(data||[],db);
+  menuData=(data||[]).filter(menuItemIsAvailable).filter(x=>!menuItemHasUnavailableMarker(x)).slice().sort((a,b)=>
     (Number(a.category_sort_order)||999999)-(Number(b.category_sort_order)||999999) ||
     String(a.category||'').localeCompare(String(b.category||''),undefined,{numeric:true,sensitivity:'base'}) ||
     (Number(a.item_sort_order)||999999)-(Number(b.item_sort_order)||999999) ||
@@ -1491,12 +1516,12 @@ function renderCategoryManagement(category=selectedManagedCategory){
     return;
   }
 
-  const enabledCount=items.filter(i=>i.is_available!==false).length;
+  const enabledCount=items.filter(i=>menuItemIsAvailable(i)).length;
   const categoryOn=enabledCount>0;
   const safeCat=encodeURIComponent(cat);
 
   const itemRows=items.map(m=>{
-    const on=m.is_available!==false;
+    const on=menuItemIsAvailable(m);
     return `<div class="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 border-t px-4 py-3 bg-white">
       <div class="min-w-0 flex-1">
         <div class="font-bold text-sm break-words">${esc(m.name_en||m.name||'Unnamed Item')}</div>
@@ -1796,7 +1821,8 @@ window.loadMenu = async function(){
     document.getElementById('menuItems').innerHTML='<div class="card p-4 text-red-600">'+esc(error.message)+'</div>';
     return;
   }
-  menuData=(data||[]).slice().sort((a,b)=>
+  await enforceMenuAvailabilityMarkers(data||[],db);
+  menuData=(data||[]).filter(menuItemIsAvailable).filter(x=>!menuItemHasUnavailableMarker(x)).slice().sort((a,b)=>
     (Number(a.category_sort_order)||999999)-(Number(b.category_sort_order)||999999) ||
     String(a.category||'').localeCompare(String(b.category||''),undefined,{numeric:true,sensitivity:'base'}) ||
     (Number(a.item_sort_order)||999999)-(Number(b.item_sort_order)||999999) ||
@@ -1814,7 +1840,7 @@ window.renderMenuCategory = function(){
   if(!cat){box.innerHTML='<div class="card p-4 text-slate-500">Select a category.</div>';return;}
 
   const rows=menuData
-    .filter(x=>x.category===cat && x.is_available!==false)
+    .filter(x=>x.category===cat && menuItemIsAvailable(x) && !menuItemHasUnavailableMarker(x))
     .sort((a,b)=>itemOrderValue(a)-itemOrderValue(b) ||
       String(a.name_en||a.name||'').localeCompare(String(b.name_en||b.name||''),undefined,{numeric:true,sensitivity:'base'}));
 
@@ -1848,7 +1874,7 @@ window.renderMenuCategory = function(){
             <label class="relative inline-flex items-center cursor-pointer">
               <input type="checkbox"
                 class="sr-only peer menu-edit-item-toggle"
-                ${m.is_available!==false?'checked':''}
+                ${menuItemIsAvailable(m)?'checked':''}
                 onchange="toggleMenuEditItemAvailability('${id}',this)">
               <div class="w-11 h-6 bg-slate-300 rounded-full peer peer-checked:bg-emerald-600
                 after:content-[''] after:absolute after:top-[2px] after:left-[2px]

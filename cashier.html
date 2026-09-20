@@ -1185,6 +1185,30 @@ window.cloudflareDB={createClient(){return {from:t=>new Q(t),storage,auth,channe
         const CLOUDFLARE_API = 'https://pos-menu.prokashofficial-kolkata.workers.dev';
         
         const cloudDB = cloudflareDB.createClient();
+// MENU AVAILABILITY RULES: an item whose name ends with @# is permanently unavailable.
+// Database values are stored as 1/0; this helper treats only true/1 as available.
+function menuItemHasUnavailableMarker(item){
+  const name=String(item?.name_en ?? item?.name ?? item?.item_name ?? '').trimEnd();
+  return name.endsWith('@#');
+}
+function menuItemIsAvailable(item){
+  const v=item?.is_available;
+  return v===true || v===1 || v==='1' || v==='true';
+}
+async function enforceMenuAvailabilityMarkers(items, client){
+  const rows=Array.isArray(items)?items:[];
+  const marked=rows.filter(menuItemHasUnavailableMarker);
+  const ids=marked.filter(menuItemIsAvailable).map(x=>x.id).filter(x=>x!==undefined&&x!==null);
+  if(ids.length && client){
+    try{
+      const r=await client.from('menu_items').update({is_available:false}).in('id',ids);
+      if(r?.error) console.warn('Could not mark @# menu items unavailable:',r.error);
+    }catch(e){ console.warn('Could not mark @# menu items unavailable:',e); }
+  }
+  marked.forEach(x=>{x.is_available=false;});
+  return rows;
+}
+
 
         // Business details printed on every Guest Check and Paid Receipt.
         const BUSINESS_NAME = 'HAMEEDS BISTRO';
@@ -1887,8 +1911,7 @@ window.cloudflareDB={createClient(){return {from:t=>new Q(t),storage,auth,channe
 
             const { data, error } = await cloudDB
                 .from('menu_items')
-                .select('id, name_en, category, dine_in_price, takeaway_price')
-                .eq('is_available', true)
+                .select('id, name_en, category, dine_in_price, takeaway_price, is_available')
                 .order('name_en', { ascending: true });
 
             if (error) {
@@ -1897,7 +1920,9 @@ window.cloudflareDB={createClient(){return {from:t=>new Q(t),storage,auth,channe
                 return;
             }
 
-            select.innerHTML = (data || []).map(m => {
+            await enforceMenuAvailabilityMarkers(data || [], cloudDB);
+            const availableMenu = (data || []).filter(menuItemIsAvailable).filter(m=>!menuItemHasUnavailableMarker(m));
+            select.innerHTML = availableMenu.map(m => {
                 const price = mode === 'Take Away'
                     ? Number(m.takeaway_price || 0)
                     : Number(m.dine_in_price || 0);
@@ -2570,9 +2595,10 @@ posEnteredAmountString = "";
         }
 
         async function fetchPosMenuData() {
-            const { data: menu } = await cloudDB.from('menu_items').select('*').eq('is_available', true);
+            const { data: menu } = await cloudDB.from('menu_items').select('*');
             if (menu) {
-                posMenuItems = menu;
+                await enforceMenuAvailabilityMarkers(menu, cloudDB);
+                posMenuItems = menu.filter(menuItemIsAvailable).filter(m=>!menuItemHasUnavailableMarker(m));
                 const cats = [...new Set(menu.map(m => m.category || 'MINUMAN'))];
                 posCategories = cats.length > 0 ? cats : ['MINUMAN', 'FRESH JUICE', 'NASI KANDAR', 'ROTI', 'WESTERN', 'MAMAK GORENG'];
                 posSelectedCategory = posCategories[0];
@@ -2690,7 +2716,7 @@ posEnteredAmountString = "";
             if(!q){box.classList.add('hidden');box.innerHTML='';return;}
 
             const rows=(posMenuItems||[])
-              .filter(m=>m.is_available!==false)
+              .filter(m=>menuItemIsAvailable(m) && !menuItemHasUnavailableMarker(m))
               .filter(m=>String(m.name_en||'').toLowerCase().includes(q))
               .slice(0,20);
 
@@ -2732,7 +2758,7 @@ posEnteredAmountString = "";
         }
         function renderPosMenuGrid(query=''){
             const grid=document.getElementById('posMenuItemsGrid'); if(!grid)return;
-            const availableItems=(posMenuItems||[]).filter(m=>m.is_available!==false); const items=query?availableItems.filter(m=>String(m.name_en||'').toLowerCase().includes(query)||String(m.category||'').toLowerCase().includes(query)):availableItems.filter(m=>(m.category||'MINUMAN')===posSelectedCategory);
+            const availableItems=(posMenuItems||[]).filter(m=>menuItemIsAvailable(m) && !menuItemHasUnavailableMarker(m)); const items=query?availableItems.filter(m=>String(m.name_en||'').toLowerCase().includes(query)||String(m.category||'').toLowerCase().includes(query)):availableItems.filter(m=>(m.category||'MINUMAN')===posSelectedCategory);
             if(!items.length){grid.innerHTML='<div class="col-span-5 text-center text-gray-400 py-10 text-xs">No items found.</div>';return;}
             const colors=['bg-[#C73E3A]','bg-[#2B6CB0]','bg-[#2F855A]','bg-[#7B341E]','bg-[#2C5282]','bg-[#1A202C]'];
             grid.innerHTML=items.map((item,i)=>{const n=String(item.name_en||'').replace(/'/g,"\\'");const price=Number(getMenuDisplayPrice(item)||0);return `<button onclick="addPosCartItem(${item.id}, '${n}', ${price})" class="${colors[i%colors.length]} hover:opacity-90 text-white p-3 rounded-lg shadow flex flex-col justify-between items-center h-20 text-center transition border border-black/20"><span class="font-bold text-xs leading-tight line-clamp-2">${item.name_en||''}</span><span class="text-xs font-semibold bg-black/20 px-2 py-0.5 rounded mt-1">RM${price.toFixed(2)}</span>${posOrderMode==='Take Away'?'<span class="text-[8px] font-black bg-amber-500 text-black px-1.5 rounded mt-0.5">TAKEAWAY</span>':''}</button>`}).join('');

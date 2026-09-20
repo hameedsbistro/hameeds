@@ -942,6 +942,30 @@ body.checkout-active #categoryContainer {
     <script>
         const CLOUDFLARE_API = 'https://pos-menu.prokashofficial-kolkata.workers.dev';
         const cloudDB = cloudflareDB.createClient();
+// MENU AVAILABILITY RULES: an item whose name ends with @# is permanently unavailable.
+// Database values are stored as 1/0; this helper treats only true/1 as available.
+function menuItemHasUnavailableMarker(item){
+  const name=String(item?.name_en ?? item?.name ?? item?.item_name ?? '').trimEnd();
+  return name.endsWith('@#');
+}
+function menuItemIsAvailable(item){
+  const v=item?.is_available;
+  return v===true || v===1 || v==='1' || v==='true';
+}
+async function enforceMenuAvailabilityMarkers(items, client){
+  const rows=Array.isArray(items)?items:[];
+  const marked=rows.filter(menuItemHasUnavailableMarker);
+  const ids=marked.filter(menuItemIsAvailable).map(x=>x.id).filter(x=>x!==undefined&&x!==null);
+  if(ids.length && client){
+    try{
+      const r=await client.from('menu_items').update({is_available:false}).in('id',ids);
+      if(r?.error) console.warn('Could not mark @# menu items unavailable:',r.error);
+    }catch(e){ console.warn('Could not mark @# menu items unavailable:',e); }
+  }
+  marked.forEach(x=>{x.is_available=false;});
+  return rows;
+}
+
 
         let currentOrderType = 'dine_in';
         let menuItems = [];
@@ -2400,7 +2424,7 @@ main{background:transparent!important;}
             
             console.log('Fetched Menu Data:', data);
             menuItems = (data || [])
-                .filter(item => item.is_available !== false && isMenuItemVisibleBySchedule(item, activeMenuSchedules))
+                .filter(item => menuItemIsAvailable(item) && !menuItemHasUnavailableMarker(item) && isMenuItemVisibleBySchedule(item, activeMenuSchedules))
                 .sort((a, b) =>
                     (Number(a.category_sort_order)||999999)-(Number(b.category_sort_order)||999999) ||
                     String(a.category || '').localeCompare(String(b.category || ''), undefined, { numeric: true, sensitivity: 'base' }) ||
@@ -6159,6 +6183,8 @@ fetchMenu=async function(){
     return;
   }
 
+  await enforceMenuAvailabilityMarkers(menuResult.data||[],cloudDB);
+
   const directSchedules=directResult.error?[]:(directResult.data||[]);
   const groups=groupResult.error?[]:(groupResult.data||[]);
   const categoryTags=catTagResult.error?[]:(catTagResult.data||[]);
@@ -6172,7 +6198,7 @@ fetchMenu=async function(){
   if(slotResult.error)console.warn('Schedule time windows load skipped:',slotResult.error.message);
 
   menuItems=(menuResult.data||[])
-    .filter(item=>item.is_available!==false)
+    .filter(item=>menuItemIsAvailable(item) && !menuItemHasUnavailableMarker(item))
     .map(item=>{
       // Manual Active/Inactive still controls whether an item exists on Customer page.
       // Scheduling no longer hides the item; it only controls whether the item can be ordered.
