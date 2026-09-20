@@ -5188,39 +5188,91 @@ window.openCloseReportPrintWindow = function(type,date,shiftNo,snapshot,user){
     }).format(d);
   }
   function actorFromOrder(order){
+    if(Number(order?.customer_id)>0){
+      return order?.customer_name || 'Customer';
+    }
     return order?.ordered_by_name ||
            order?.created_by_name ||
-           order?.customer_name ||
-           order?.accepted_by_name ||
            order?.staff_name ||
            order?.cashier_name ||
            order?.waiter_name ||
-           'Customer';
+           null;
   }
 
   function actorFromItem(item,order){
+    if(Number(order?.customer_id)>0){
+      return order?.customer_name || 'Customer';
+    }
     return item?.added_by_name ||
            item?.added_by ||
            item?.ordered_by ||
            item?.created_by_name ||
            item?.created_by ||
            item?.staff_name ||
-           item?.customer_name ||
-           actorFromOrder(order);
+           null;
   }
-  async function resolveActor(item,order){
+
+  async function resolveActorInfo(item,order){
+    const isCustomer=Number(order?.customer_id)>0;
+    if(isCustomer){
+      return {
+        type:'customer',
+        name:order?.customer_name || 'Customer',
+        role:'Customer'
+      };
+    }
+
     let name=actorFromItem(item,order);
     const id=item?.added_by_id || item?.staff_id || item?.created_by_id || null;
     const email=item?.added_by_email || item?.staff_email || item?.created_by_email || null;
-    if(id||email){
-      try{
-        let q=cloudDB.from('profiles').select('*').limit(1);
-        q=id?q.eq('id',id):q.eq('email',email);
+    let role=item?.added_by_role || item?.staff_role || item?.created_by_role || null;
+
+    try{
+      let q=null;
+      if(id){
+        q=cloudDB.from('profiles').select('*').eq('id',id).limit(1);
+      }else if(email){
+        q=cloudDB.from('profiles').select('*').eq('email',email).limit(1);
+      }else if(name){
+        q=cloudDB.from('profiles').select('*').limit(1);
+        const byFull=await q.eq('full_name',name).maybeSingle();
+        if(byFull?.data){
+          name=byFull.data.full_name||byFull.data.name||byFull.data.email||name;
+          role=byFull.data.role||role||'Staff';
+        }else{
+          const byName=await cloudDB.from('profiles').select('*').eq('name',name).maybeSingle();
+          if(byName?.data){
+            name=byName.data.full_name||byName.data.name||byName.data.email||name;
+            role=byName.data.role||role||'Staff';
+          }
+        }
+        return {type:'staff',name:name||'Staff',role:role||'Staff'};
+      }
+      if(q){
         const r=await q.maybeSingle();
-        if(r.data)name=r.data.full_name||r.data.name||r.data.email||name;
-      }catch(e){}
+        if(r?.data){
+          name=r.data.full_name||r.data.name||r.data.email||name;
+          role=r.data.role||role||'Staff';
+        }
+      }
+    }catch(e){}
+
+    // A staff-created order may have its actor only in the current cashier session.
+    if(!name){
+      try{
+        const session=JSON.parse(localStorage.getItem('cashier_session')||'{}')||{};
+        name=session.exact_staff_name||session.full_name||session.name||session.email||'Staff';
+        role=session.role||'Cashier';
+      }catch(e){
+        name='Staff'; role='Staff';
+      }
     }
-    return name||'Staff';
+    return {type:'staff',name:name||'Staff',role:role||'Staff'};
+  }
+
+  async function resolveActor(item,order){
+    const info=await resolveActorInfo(item,order);
+    return info.type==='customer' ? info.name+' (Customer)' : info.name+' ('+(info.role||'Staff')+')';
   }
 
   window.closeOrderDetailsAudit=function(){
@@ -5260,6 +5312,20 @@ window.openCloseReportPrintWindow = function(type,date,shiftNo,snapshot,user){
       return;
     }
 
+    // Determine who actually created the order:
+    // customer_id => customer; otherwise use the staff actor stored on the item.
+    let orderActorInfo=null;
+    if(Number(order?.customer_id)>0){
+      orderActorInfo={type:'customer',name:order?.customer_name||'Customer',role:'Customer'};
+    }else{
+      const firstActorItem=(items||[]).find(i =>
+        i?.added_by_id || i?.added_by_email || i?.added_by_name || i?.added_by ||
+        i?.staff_id || i?.staff_email || i?.staff_name ||
+        i?.created_by_id || i?.created_by_email || i?.created_by_name
+      );
+      orderActorInfo=await resolveActorInfo(firstActorItem||{},order);
+    }
+
     const rows=[];
     for(const item of (items||[])){
       const actor=await resolveActor(item,order);
@@ -5288,7 +5354,11 @@ window.openCloseReportPrintWindow = function(type,date,shiftNo,snapshot,user){
           <div><span class="text-slate-500">Order:</span> <b>#${auditEsc(order.id)}</b></div>
           <div><span class="text-slate-500">Table:</span> <b>${auditEsc(order.table_id||order.table_number||'N/A')}</b></div>
           <div><span class="text-slate-500">Order Time:</span> <b>${auditEsc(localTime(order.created_at))}</b></div>
-          <div><span class="text-slate-500">Ordered By:</span> <b>${auditEsc(actorFromOrder(order))}</b></div>
+          <div><span class="text-slate-500">Ordered By:</span>
+            <span class="inline-flex items-center gap-1.5 ml-1 px-2.5 py-1 rounded-full font-extrabold ${orderActorInfo?.type==='customer'?'bg-blue-100 text-blue-800 border border-blue-200':'bg-emerald-100 text-emerald-800 border border-emerald-200'}">
+              ${orderActorInfo?.type==='customer'?'👤':'🧑‍💼'} ${auditEsc(orderActorInfo?.name||'Staff')} <span class="opacity-80">(${auditEsc(orderActorInfo?.role||'Staff')})</span>
+            </span>
+          </div>
         </div>
       </div>
       <div class="audit-card">${rows.join('')||'<div class="text-slate-500 text-sm">No items found.</div>'}</div>`;
