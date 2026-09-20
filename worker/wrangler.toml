@@ -1,0 +1,11 @@
+name = "pos-menu"
+main = "worker.js"
+compatibility_date = "2026-09-21"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "rmp_soloutions"
+database_id = "YOUR_REAL_D1_DATABASE_ID"
+
+# SYNC_KEY is stored as a Cloudflare Worker Secret.
+# Do NOT put the secret value in this file.
