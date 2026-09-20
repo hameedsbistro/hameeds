@@ -1269,6 +1269,14 @@ window.cloudflareDB={createClient(){return {from:t=>new Q(t),storage,auth,channe
 
         function playNewOrderBeep() {
             if (!newOrderAlertActive) return;
+            // Use the same audio path that is already proven to work for the
+            // customer Call button on this cashier device.
+            try {
+                if (typeof window.__hameedsPlayCashierRing === 'function') {
+                    window.__hameedsPlayCashierRing();
+                    return;
+                }
+            } catch(e) {}
             try {
                 if(!newOrderAlertAudio) ensureAlertAudioReady();
                 if(newOrderAlertAudio){
@@ -1282,6 +1290,7 @@ window.cloudflareDB={createClient(){return {from:t=>new Q(t),storage,auth,channe
             try {
                 const ctx=newOrderAlertAudioContext;
                 if(!ctx)return;
+                if(ctx.state==='suspended')ctx.resume().catch(()=>{});
                 const now=ctx.currentTime,o=ctx.createOscillator(),g=ctx.createGain();
                 o.type='square';o.frequency.value=1120;g.gain.setValueAtTime(.0001,now);
                 g.gain.exponentialRampToValueAtTime(.9,now+.008);g.gain.exponentialRampToValueAtTime(.0001,now+.16);
@@ -1447,7 +1456,7 @@ window.cloudflareDB={createClient(){return {from:t=>new Q(t),storage,auth,channe
             setupRealtimeSubscription();
         }
 
-        function setupRealtimeSubscription() {
+        async function setupRealtimeSubscription() {
             try {
                 cloudDB
                     .channel('public:orders')
@@ -1475,9 +1484,44 @@ window.cloudflareDB={createClient(){return {from:t=>new Q(t),storage,auth,channe
             } catch (e) {
                 console.log("Realtime subscription fallback enabled");
             }
+
+            // Internal 1-second order monitor. It checks the database silently
+            // and only redraws the notification list when the pending-order set
+            // actually changes, so the page itself never blinks/refreshed.
+            if (window.__hameedsOrderMonitorTimer) clearInterval(window.__hameedsOrderMonitorTimer);
+            const establishOrderBaseline = async () => {
+                try {
+                    const r = await cloudDB.from('orders').select('id,status,created_at,table_id').eq('status','pending').order('created_at',{ascending:false});
+                    const rows = Array.isArray(r.data) ? r.data : [];
+                    window.__hameedsPendingSignature = rows.map(o=>String(o.id)).join('|');
+                    knownPendingOrderIds = new Set(rows.map(o=>String(o.id)));
+                } catch(e) {}
+            };
+            await establishOrderBaseline();
+            window.__hameedsOrderMonitorTimer = setInterval(async () => {
+                if (document.visibilityState !== 'visible') return;
+                try {
+                    const r = await cloudDB.from('orders').select('*').eq('status','pending').order('created_at',{ascending:false});
+                    if (r.error) return;
+                    const rows = Array.isArray(r.data) ? r.data : [];
+                    const signature = rows.map(o=>String(o.id)).join('|');
+                    if (signature === window.__hameedsPendingSignature) return;
+
+                    const oldIds = new Set(String(window.__hameedsPendingSignature || '').split('|').filter(Boolean));
+                    const newlyArrived = rows.find(o=>!oldIds.has(String(o.id)) && !newOrderAlertMutedOrderIds.has(String(o.id)));
+                    window.__hameedsPendingSignature = signature;
+                    knownPendingOrderIds = new Set(rows.map(o=>String(o.id)));
+
+                    // Update the visible list only when something really changed.
+                    await fetchIncomingOrders(false);
+                    if (newlyArrived) startNewOrderAlert(newlyArrived);
+                    else if (!rows.length) stopNewOrderAlert();
+                } catch(e) {}
+            }, 1000);
         }
 
         async function handleLogout() {
+            if (window.__hameedsOrderMonitorTimer) { clearInterval(window.__hameedsOrderMonitorTimer); window.__hameedsOrderMonitorTimer = null; }
             stopNewOrderAlert();
             localStorage.removeItem('cashier_session');
             document.getElementById('mainPanel').classList.add('hidden');
@@ -6557,6 +6601,17 @@ document.addEventListener('DOMContentLoaded',()=>{
       if(activeCustomerCall)speakCustomerCall();
     }
   }
+
+  // Expose the already-working cashier ring sound so the new-order alert
+  // uses the exact same audio path and Android autoplay permissions.
+  window.__hameedsPlayCashierRing=function(){
+    try{
+      const a=new Audio(CUSTOMER_RING_SRC);
+      a.preload='auto';
+      a.volume=1;
+      a.play().catch(()=>{});
+    }catch(e){}
+  };
 
   function startCallSound(){
     stopCallSound();
