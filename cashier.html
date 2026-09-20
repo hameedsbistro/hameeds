@@ -6469,9 +6469,10 @@ document.addEventListener('DOMContentLoaded',()=>{
     activeCustomerCall=null;
     if(!id)return;
     try{
-      await cloudDB.from('customer_calls')
-        .update({status:'acknowledged',acknowledged_at:new Date().toISOString()})
+      const {error}=await cloudDB.from('customer_calls')
+        .delete()
         .eq('id',id);
+      if(error)throw error;
     }catch(e){console.warn('Customer call acknowledge failed',e)}
   };
 
