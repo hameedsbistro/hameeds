@@ -579,6 +579,14 @@ function channel(){let timers=[];let handlers=[];return {on(type,filter,cb){hand
 window.cloudflareDB={createClient(){return {from:t=>new Q(t),storage,auth,channel,removeChannel:()=>{},removeAllChannels:()=>{}}}};
 })();
 </script>
+
+<style id="checkout-hide-category-panel-fix">
+/* During checkout, keep the blue menu header but hide only the category strip. */
+body.checkout-active #categoryContainer {
+  display: none !important;
+}
+</style>
+
 </head>
 <body class="bg-gray-100 min-h-screen flex flex-col justify-between font-sans customer-home-screen">
 
@@ -3206,8 +3214,15 @@ main{background:transparent!important;}
             }
         }
 
+        function setCheckoutCategoryVisibility(hidden) {
+            const container = document.getElementById('categoryContainer');
+            if (container) container.style.display = hidden ? 'none' : '';
+            document.body.classList.toggle('checkout-active', !!hidden);
+        }
+
         function proceedToCheckout() {
             closeCartModal();
+            setCheckoutCategoryVisibility(true);
             openCheckoutModal();
         }
 
@@ -3390,7 +3405,7 @@ main{background:transparent!important;}
 
         }
 
-        function closeCheckoutModal() { document.getElementById('checkoutModal').classList.add('hidden'); }
+        function closeCheckoutModal() { document.getElementById('checkoutModal').classList.add('hidden'); setCheckoutCategoryVisibility(false); }
 
         let customerPermanentModifiers=[];
         let customerPermanentModifiersLoaded=false;
@@ -9419,12 +9434,65 @@ body.hameeds-search-keyboard-open #categoryStickySearchPanel{
 })();
 </script>
 
+<style id="checkout-hide-category-panel-final">
+/* During Checkout keep the blue/header area visible but hide only the category panel. */
+body.checkout-modal-open #categoryContainer{display:none!important;}
+</style>
+
 <script id="customer-receipt-80mm-onepage-final">
 (function(){
   'use strict';
 
+  var JSPDF_URL='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+  var jsPdfPromise=null;
+
+  function loadJsPdf(){
+    if(window.jspdf && window.jspdf.jsPDF) return Promise.resolve(window.jspdf.jsPDF);
+    if(jsPdfPromise) return jsPdfPromise;
+    jsPdfPromise=new Promise(function(resolve,reject){
+      var existing=document.querySelector('script[data-hameeds-jspdf="1"]');
+      if(existing){
+        existing.addEventListener('load',function(){
+          if(window.jspdf&&window.jspdf.jsPDF)resolve(window.jspdf.jsPDF);else reject(new Error('PDF library failed to load.'));
+        },{once:true});
+        existing.addEventListener('error',function(){reject(new Error('PDF library failed to load.'));},{once:true});
+        return;
+      }
+      var sc=document.createElement('script');
+      sc.src=JSPDF_URL; sc.async=true; sc.dataset.hameedsJspdf='1';
+      sc.onload=function(){
+        if(window.jspdf&&window.jspdf.jsPDF)resolve(window.jspdf.jsPDF);
+        else reject(new Error('PDF library failed to load.'));
+      };
+      sc.onerror=function(){reject(new Error('Unable to load PDF generator.'));};
+      document.head.appendChild(sc);
+    });
+    return jsPdfPromise;
+  }
+
+  function imageToDataUrl(url){
+    return new Promise(function(resolve){
+      var img=new Image();
+      img.crossOrigin='anonymous';
+      img.onload=function(){
+        try{
+          var c=document.createElement('canvas');
+          c.width=img.naturalWidth||200; c.height=img.naturalHeight||200;
+          var ctx=c.getContext('2d'); ctx.drawImage(img,0,0);
+          resolve(c.toDataURL('image/jpeg',0.88));
+        }catch(e){resolve(null);}
+      };
+      img.onerror=function(){resolve(null);};
+      img.src=url;
+    });
+  }
+
+  function mmLines(doc,text,maxWidth,fontSize){
+    doc.setFontSize(fontSize);
+    return doc.splitTextToSize(String(text||''),maxWidth);
+  }
+
   window.downloadCustomerReceipt=async function(orderId){
-    var w=null;
     try{
       var bundle=await getCustomerOrderBundle(Number(orderId));
       var order=bundle.order, items=bundle.items||[], invoice=bundle.invoice||null;
@@ -9433,12 +9501,7 @@ body.hameeds-search-keyboard-open #categoryStickySearchPanel{
         return;
       }
 
-      w=window.open('','_blank');
-      if(!w){
-        alert('Please allow pop-ups to download/print the receipt.');
-        return;
-      }
-
+      var jsPDF=await loadJsPdf();
       var subtotal=items.reduce(function(s,i){return s+Number(i.price||0)*Number(i.quantity||0);},0);
       var savedSst=Number(order.sst_tax);
       var sst=Number.isFinite(savedSst)?savedSst:Math.round(subtotal*0.06*100)/100;
@@ -9446,63 +9509,87 @@ body.hameeds-search-keyboard-open #categoryStickySearchPanel{
       var discount=Number((invoice&&invoice.discount_amount)||0);
       var paymentMethod=(invoice&&invoice.payment_method)||'';
       var date=new Date((invoice&&invoice.created_at)||order.created_at||Date.now()).toLocaleString();
-      var logoUrl='';
-      try{logoUrl=new URL('images/logo.jpg',window.location.href).href;}catch(e){logoUrl='images/logo.jpg';}
+      var table=String(order.table_id||order.table_no||'N/A');
 
-      var rows=items.map(function(i){
-        var mods=(i.modifiers_normalized||[]).map(function(m){
-          return '<div class="mod">↳ '+escapeHtml(m.text||m)+'</div>';
-        }).join('');
-        return '<div class="item"><div class="item-name"><b>'+escapeHtml(i.display_name)+'</b> × '+Number(i.quantity||0)+mods+'</div><b class="item-amount">RM'+(Number(i.price||0)*Number(i.quantity||0)).toFixed(2)+'</b></div>';
-      }).join('');
+      /* Calculate a receipt-specific height from the actual item count/text. */
+      var height=55;
+      height += 12; // header/meta
+      items.forEach(function(i){
+        var name=String(i.display_name||'Unknown Item');
+        var qty=Number(i.quantity||0);
+        var mods=(i.modifiers_normalized||[]).map(function(m){return String(m.text||m);});
+        var nameLines=Math.max(1,Math.ceil(name.length/29));
+        height += 8 + (nameLines-1)*3.4;
+        height += mods.length*3.2;
+      });
+      height += 27; // totals/footer
+      height=Math.max(60,Math.ceil(height));
 
-      var safeTable=escapeHtml(order.table_id||order.table_no||'N/A');
-      var safeDate=escapeHtml(date);
-      var safePayment=escapeHtml(paymentMethod);
-      var receipt='<!doctype html><html><head><meta charset="utf-8">'+
-        '<meta name="viewport" content="width=device-width,initial-scale=1">'+
-        '<title>Hameeds_Bistro_Receipt_'+Number(order.id)+'</title>'+ 
-        '<style id="dynamic-page-size">@page{size:80mm 200mm;margin:0}</style>'+ 
-        '<style>'+ 
-        '*{box-sizing:border-box}'+
-        'html,body{margin:0!important;padding:0!important;width:80mm!important;min-width:80mm!important;background:#fff!important;background-image:none!important;color:#000!important;font-family:Arial,Helvetica,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
-        'html::before,html::after,body::before,body::after{display:none!important;content:none!important;background:none!important}'+
-        '.receipt-sheet{width:80mm!important;min-width:80mm!important;margin:0!important;padding:3mm 3mm 2.5mm!important;background:#fff!important;background-image:none!important;overflow:visible!important}'+
-        '.header{text-align:center;border-bottom:.35mm dashed #333;padding-bottom:2.2mm;margin-bottom:2mm}'+
-        '.brand{display:flex;align-items:center;justify-content:center;gap:2mm}'+
-        '.logo{width:11mm;height:11mm;object-fit:contain;background:#fff}'+
-        'h1{font-family:"Times New Roman",serif;font-size:6mm;line-height:1;margin:0;font-weight:900}'+
-        '.title{font-size:2.7mm;font-weight:900;letter-spacing:.25mm;margin-top:.7mm}'+
-        '.small{font-size:2.6mm;line-height:1.45;font-weight:700}'+
-        '.meta{margin-top:1.6mm}'+
-        '.item{display:flex;justify-content:space-between;align-items:flex-start;gap:2mm;padding:1.8mm 0;border-bottom:.25mm dashed #aaa;font-size:3mm;line-height:1.3;break-inside:avoid}'+
-        '.item-name{flex:1;min-width:0;overflow-wrap:anywhere}'+
-        '.item-amount{flex:0 0 auto;white-space:nowrap}'+
-        '.mod{font-size:2.45mm;margin:.6mm 0 0 2.5mm;font-weight:600}'+
-        '.totals{margin-top:2mm;font-size:3.1mm;font-weight:700}'+
-        '.row{display:flex;justify-content:space-between;gap:3mm;padding:.7mm 0}'+
-        '.total{font-size:4.5mm;font-weight:900;border-top:.4mm solid #222;margin-top:1mm;padding-top:1.4mm}'+
-        '.paid{text-align:center;font-size:3.5mm;font-weight:900;margin-top:2.5mm;letter-spacing:.35mm}'+
-        '.actions{margin:4mm 0 1mm;text-align:center}'+
-        '.actions button{padding:2.4mm 4mm;font-size:3mm;font-weight:800}'+
-        '@media print{html,body,.receipt-sheet{background:#fff!important;background-image:none!important}.actions{display:none!important}.receipt-sheet{padding:3mm 3mm 2.5mm!important;margin:0!important}*{box-shadow:none!important;text-shadow:none!important}}'+
-        '</style></head><body><div id="receiptSheet" class="receipt-sheet">'+
-        '<div class="header"><div class="brand"><img src="'+logoUrl+'" class="logo" onerror="this.style.display=\'none\'"><div><h1>HAMEEDS BISTRO</h1><div class="title">CUSTOMER FINAL RECEIPT</div></div></div>'+ 
-        '<div class="small meta">No.-11, Jalan KLIA Avenue, Pusat Perdagangan KLIA Avenue, Sepang, 43900<br>Tel: +60 387059807 | Email: prokashlaptop@gmail.com<br>Order: #'+Number(order.id)+' | Table: '+safeTable+'<br>Date: '+safeDate+(paymentMethod?'<br>Payment: '+safePayment:'')+'</div></div>'+ 
-        '<div>'+rows+'</div>'+ 
-        '<div class="totals"><div class="row"><span>Subtotal:</span><b>RM'+subtotal.toFixed(2)+'</b></div><div class="row"><span>SST (6%):</span><b>RM'+sst.toFixed(2)+'</b></div>'+ 
-        (discount>0?'<div class="row"><span>Discount:</span><b>- RM'+discount.toFixed(2)+'</b></div>':'')+
-        '<div class="row total"><span>TOTAL PAID:</span><span>RM'+invoiceTotal.toFixed(2)+'</span></div></div><div class="paid">PAID</div>'+ 
-        '<div class="actions"><button onclick="window.print()">Download / Save as PDF</button></div></div>'+ 
-        '<script>(function(){function makeOnePage(){var sheet=document.getElementById("receiptSheet");var style=document.getElementById("dynamic-page-size");if(!sheet||!style)return;var pxPerMm=96/25.4;var hPx=Math.max(sheet.scrollHeight,sheet.getBoundingClientRect().height,document.body.scrollHeight,document.documentElement.scrollHeight);var hMm=Math.max(40,Math.ceil(hPx/pxPerMm)+2);style.textContent="@page{size:80mm "+hMm+"mm;margin:0} html,body{width:80mm!important;height:"+hMm+"mm!important;min-height:"+hMm+"mm!important;background:#fff!important;background-image:none!important}";setTimeout(function(){window.print()},220)}window.addEventListener("load",function(){var imgs=Array.prototype.slice.call(document.images||[]);if(!imgs.length){requestAnimationFrame(function(){requestAnimationFrame(makeOnePage)});return}Promise.all(imgs.map(function(img){if(img.complete)return Promise.resolve();return new Promise(function(r){img.addEventListener("load",r,{once:true});img.addEventListener("error",r,{once:true})})})).then(function(){requestAnimationFrame(function(){requestAnimationFrame(makeOnePage)})})})})();<\/script>'+ 
-        '</body></html>';
+      var doc=new jsPDF({orientation:'portrait',unit:'mm',format:[80,height],compress:true});
+      var margin=4, contentW=80-margin*2, y=5;
+      doc.setTextColor(0,0,0);
 
-      w.document.open();
-      w.document.write(receipt);
-      w.document.close();
+      var logoUrl='images/logo.jpg';
+      var logoData=null;
+      try{logoData=await imageToDataUrl(new URL(logoUrl,window.location.href).href);}catch(e){}
+      if(logoData){
+        try{doc.addImage(logoData,'JPEG',margin,y,11,11);}catch(e){}
+      }
+      doc.setFont('times','bold'); doc.setFontSize(16);
+      doc.text('HAMEEDS BISTRO',40,y+5,{align:'center'});
+      doc.setFont('helvetica','bold'); doc.setFontSize(7.5);
+      doc.text('CUSTOMER FINAL RECEIPT',40,y+9,{align:'center'});
+      y+=13;
+      doc.setDrawColor(80); doc.setLineDashPattern([1,1],0); doc.line(margin,y,80-margin,y); y+=3;
+
+      doc.setFont('helvetica','bold'); doc.setFontSize(7);
+      var meta=[
+        'No.-11, Jalan KLIA Avenue, Pusat Perdagangan KLIA Avenue, Sepang, 43900',
+        'Tel: +60 387059807 | Email: prokashlaptop@gmail.com',
+        'Order: #'+Number(order.id)+' | Table: '+table,
+        'Date: '+date
+      ];
+      if(paymentMethod)meta.push('Payment: '+paymentMethod);
+      meta.forEach(function(line){
+        var lines=mmLines(doc,line,contentW,7);
+        lines.forEach(function(t){doc.text(t,40,y,{align:'center'});y+=3.2;});
+      });
+      y+=1.5;
+      doc.line(margin,y,80-margin,y); y+=3;
+
+      items.forEach(function(i){
+        var name=String(i.display_name||'Unknown Item');
+        var qty=Number(i.quantity||0), amount=Number(i.price||0)*qty;
+        var mods=(i.modifiers_normalized||[]);
+        doc.setFont('helvetica','bold'); doc.setFontSize(8);
+        var nameLines=mmLines(doc,name+' x '+qty,contentW-20,8);
+        var first=true;
+        nameLines.forEach(function(line){
+          doc.text(line,margin,y);
+          if(first){doc.text('RM'+amount.toFixed(2),80-margin,y,{align:'right'});first=false;}
+          y+=3.5;
+        });
+        doc.setFont('helvetica','normal'); doc.setFontSize(6.5);
+        mods.forEach(function(m){
+          var ml='↳ '+String(m.text||m)+(Number(m.price||0)!==0?' '+(Number(m.price)>0?'+':'-')+'RM'+Math.abs(Number(m.price)).toFixed(2):'');
+          mmLines(doc,ml,contentW-5,6.5).forEach(function(line){doc.text(line,margin+3,y);y+=2.8;});
+        });
+        doc.setDrawColor(170); doc.setLineDashPattern([0.7,0.7],0); doc.line(margin,y,80-margin,y); y+=2.5;
+      });
+
+      doc.setLineDashPattern([],0);
+      doc.setFont('helvetica','bold'); doc.setFontSize(8);
+      [['Subtotal:','RM'+subtotal.toFixed(2)],['SST (6%):','RM'+sst.toFixed(2)]].forEach(function(r){doc.text(r[0],margin,y);doc.text(r[1],80-margin,y,{align:'right'});y+=4;});
+      if(discount>0){doc.text('Discount:',margin,y);doc.text('- RM'+discount.toFixed(2),80-margin,y,{align:'right'});y+=4;}
+      doc.setDrawColor(0);doc.line(margin,y,80-margin,y);y+=4;
+      doc.setFontSize(11);doc.setFont('helvetica','bold');
+      doc.text('TOTAL PAID:',margin,y);doc.text('RM'+invoiceTotal.toFixed(2),80-margin,y,{align:'right'});y+=5;
+      doc.setFontSize(8);doc.text('PAID',40,y,{align:'center'});
+
+      var filename='Hameeds_Bistro_Receipt_'+Number(order.id)+'.pdf';
+      doc.save(filename);
     }catch(error){
-      try{if(w)w.close();}catch(_){ }
-      alert('Unable to prepare receipt: '+(error&&error.message?error.message:error));
+      alert('Unable to download receipt: '+(error&&error.message?error.message:error));
     }
   };
 })();
