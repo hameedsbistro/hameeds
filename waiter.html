@@ -1196,29 +1196,29 @@ async function enforceMenuAvailabilityMarkers(items, client){
 
             errorDiv.classList.add('hidden');
 
-            const { data, error } = await cloudDB
-                .from('profiles')
-                .select('*')
-                .eq('password', password)
-                .limit(2);
+            const authResult = await fetch('https://pos-menu.prokashofficial-kolkata.workers.dev/api/auth/staff-login-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password })
+            });
+            const result = await authResult.json().catch(() => ({}));
+            const data = result.user || null;
+            const error = !authResult.ok ? { message: result.error || 'Invalid password' } : null;
 
             const allowedRoles = ['waiter', 'cashier', 'manager', 'admin', 'staff'];
-            const matches = (Array.isArray(data) ? data : []).filter(row =>
-                allowedRoles.includes(String(row?.role || '').trim().toLowerCase())
-            );
+            const roleAllowed = data && allowedRoles.includes(String(data?.role || '').trim().toLowerCase());
 
-            if (error || matches.length !== 1) {
-                errorDiv.innerText = matches.length > 1
-                    ? "This password is used by more than one staff account. Please set a unique password in Admin."
-                    : "Invalid password or unauthorized role.";
+            if (error || !data || !roleAllowed || !result.token) {
+                errorDiv.innerText = result.error || "Invalid password or unauthorized role.";
                 errorDiv.classList.remove('hidden');
                 return;
             }
 
-            const user = matches[0];
+            const user = data;
             const normalizedRole = String(user.role || '').trim().toLowerCase();
             user.role = user.role || normalizedRole;
             localStorage.setItem('waiter_session', JSON.stringify(user));
+            localStorage.setItem('rmp_cf_staff_token', result.token);
             ensureAlertAudioReady();
             applyUserSession(user);
         }
@@ -1719,9 +1719,10 @@ async function enforceMenuAvailabilityMarkers(items, client){
 
         async function loadMenuForDropdown() {
             const select = document.getElementById('extraMenuItemSelect');
-            const { data } = await cloudDB.from('menu_items').select('id, name_en, price');
+            const { data } = await cloudDB.from('menu_items').select('id, name_en, price, is_available');
+            await enforceMenuAvailabilityMarkers(data || [], cloudDB);
             if(data) {
-                select.innerHTML = data.map(m => `<option value="${m.id}" data-price="${m.price}" data-name="${m.name_en}">${m.name_en} - RM${m.price}</option>`).join('');
+                select.innerHTML = data.filter(m=>menuItemIsAvailable(m) && !menuItemHasUnavailableMarker(m)).map(m => `<option value="${m.id}" data-price="${m.price}" data-name="${m.name_en}">${m.name_en} - RM${m.price}</option>`).join('');
             }
         }
 

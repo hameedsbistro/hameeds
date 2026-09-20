@@ -267,6 +267,30 @@ var index_default = {
         const token = await staffToken(env, safeUser);
         return json({ ok: true, user: safeUser, token });
       }
+      // Staff login by password only. Passwords must be unique across staff accounts.
+      if (url.pathname === "/api/auth/staff-login-password" && request.method === "POST") {
+        const b = await request.json();
+        const password = String(b.password || "");
+        if (!password) return json({ ok: false, error: "Password is required" }, 400);
+        const users = await env.DB.prepare(`
+          SELECT id, full_name, name, email, password, role, phone,
+                 passport, passport_number, employment_id, joining_date,
+                 created_at, updated_at
+          FROM profiles
+          WHERE password = ?
+            AND lower(COALESCE(role,'')) IN ('admin','manager','cashier','waiter','staff')
+          LIMIT 2
+        `).bind(password).all();
+        const rows = users.results || [];
+        if (rows.length !== 1) {
+          return json({ ok: false, error: rows.length > 1 ? "This password is used by more than one staff account" : "Invalid password" }, 401);
+        }
+        if (!env.RMP_API_SECRET) return json({ ok: false, error: "Staff session secret is not configured" }, 500);
+        const safeUser = cleanRow(rows[0]);
+        const token = await staffToken(env, safeUser);
+        return json({ ok: true, user: safeUser, token });
+      }
+
       if (url.pathname === "/api/auth/customer-login" && request.method === "POST") {
         const b = await request.json();
         const user = await env.DB.prepare(`SELECT * FROM customers WHERE lower(email)=lower(?) AND password=? LIMIT 1`).bind(String(b.email || "").trim(), String(b.password || "")).first();

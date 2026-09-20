@@ -1055,7 +1055,7 @@ function renderCategoryChart(labels,values){
 
 function parseCSV(text){const rows=[];let row=[],cell='',quote=false;for(let i=0;i<text.length;i++){const c=text[i];if(c==='"'){if(quote&&text[i+1]==='"'){cell+='"';i++}else quote=!quote}else if(c===','&&!quote){row.push(cell);cell=''}else if((c==='\n'||c==='\r')&&!quote){if(c==='\r'&&text[i+1]==='\n')i++;row.push(cell);cell='';if(row.some(v=>v.trim()!==''))rows.push(row);row=[]}else cell+=c}if(cell!==''||row.length){row.push(cell);rows.push(row)}if(!rows.length)return[];const headers=rows.shift().map(h=>h.trim().toLowerCase());return rows.map(r=>Object.fromEntries(headers.map((h,i)=>[h,(r[i]??'').trim()]))).filter(r=>Object.values(r).some(Boolean))}
 function normalizeCSVRow(r){const get=(...keys)=>{for(const k of keys)if(r[k]!==undefined)return r[k];return ''};return{name_en:get('name_en','name','item_name'),category:get('category'),dine_in_price:get('dine_in_price','price','dine in price','dinein_price'),takeaway_price:get('takeaway_price','take away price','takeaway')};}
-async function loadMenu(){const {data,error}=await db.from(MENU_TABLE).select('*').limit(5000);if(error){document.getElementById('menuItems').innerHTML='<div class="card p-4 text-red-600">'+esc(error.message)+'</div>';return}await enforceMenuAvailabilityMarkers(data||[],db);menuData=(data||[]).filter(menuItemIsAvailable).filter(x=>!menuItemHasUnavailableMarker(x)).slice().sort((a,b)=>
+async function loadMenu(){const {data,error}=await db.from(MENU_TABLE).select('*').limit(5000);if(error){document.getElementById('menuItems').innerHTML='<div class="card p-4 text-red-600">'+esc(error.message)+'</div>';return}await enforceMenuAvailabilityMarkers(data||[],db);menuData=(data||[]).slice().sort((a,b)=>
   (Number(a.category_sort_order)||999999)-(Number(b.category_sort_order)||999999) ||
   String(a.category||'').localeCompare(String(b.category||''),undefined,{numeric:true,sensitivity:'base'}) ||
   (Number(a.item_sort_order)||999999)-(Number(b.item_sort_order)||999999) ||
@@ -1206,7 +1206,8 @@ async function uploadImage(file,id){
 
 async function saveMenuItem(id){
   const old=menuData.find(x=>String(x.id)===String(id));if(!old)return;
-  const payload={name_en:document.getElementById('name-'+id).value.trim(),category:document.getElementById('cat-'+id).value.trim(),dine_in_price:Number(document.getElementById('dine-'+id).value||0),takeaway_price:Number(document.getElementById('take-'+id).value||0)};
+  const newName=document.getElementById('name-'+id).value.trim();
+  const payload={name_en:newName,category:document.getElementById('cat-'+id).value.trim(),dine_in_price:Number(document.getElementById('dine-'+id).value||0),takeaway_price:Number(document.getElementById('take-'+id).value||0),is_available:menuItemHasUnavailableMarker({name_en:newName})?false:menuItemIsAvailable(old)};
   const file=document.getElementById('file-'+id).files[0];
   let newUpload=null;
   try{
@@ -1458,7 +1459,7 @@ async function loadCategoryManagement(){
   }
 
   await enforceMenuAvailabilityMarkers(data||[],db);
-  menuData=(data||[]).filter(menuItemIsAvailable).filter(x=>!menuItemHasUnavailableMarker(x)).slice().sort((a,b)=>
+  menuData=(data||[]).slice().sort((a,b)=>
     (Number(a.category_sort_order)||999999)-(Number(b.category_sort_order)||999999) ||
     String(a.category||'').localeCompare(String(b.category||''),undefined,{numeric:true,sensitivity:'base'}) ||
     (Number(a.item_sort_order)||999999)-(Number(b.item_sort_order)||999999) ||
@@ -1632,12 +1633,26 @@ async function toggleCategoryAvailability(category,checkbox){
   const desired=!!checkbox.checked;
   checkbox.disabled=true;
   try{
-    const {error}=await db.from(MENU_TABLE).update({is_available:desired}).eq('category',category);
-    if(error)throw error;
+    const cat=String(category);
+    const items=menuData.filter(m=>(String(m.category||'Uncategorized').trim()||'Uncategorized')===cat);
+    const normalItems=items.filter(m=>!menuItemHasUnavailableMarker(m));
+    const markedItems=items.filter(m=>menuItemHasUnavailableMarker(m));
+    const ids=normalItems.map(m=>m.id).filter(id=>id!==undefined&&id!==null);
+    if(ids.length){
+      const {error}=await db.from(MENU_TABLE).update({is_available:desired}).in('id',ids);
+      if(error)throw error;
+    }
+    const markedIds=markedItems.map(m=>m.id).filter(id=>id!==undefined&&id!==null);
+    if(markedIds.length){
+      const {error}=await db.from(MENU_TABLE).update({is_available:false}).in('id',markedIds);
+      if(error)throw error;
+    }
     menuData.forEach(m=>{
-      if((String(m.category||'Uncategorized').trim()||'Uncategorized')===String(category))m.is_available=desired;
+      if((String(m.category||'Uncategorized').trim()||'Uncategorized')===cat){
+        m.is_available=menuItemHasUnavailableMarker(m)?false:desired;
+      }
     });
-    toast(`${category} ${desired?'enabled':'disabled'} for customer page.`);
+    toast(`${category} ${desired?'enabled':'disabled'} for customer page. @# items remain OFF.`);
     selectedManagedCategory=category;
     renderCategoryManagement(category);
   }catch(e){
@@ -1649,14 +1664,16 @@ async function toggleCategoryAvailability(category,checkbox){
 }
 
 async function toggleItemAvailability(id,checkbox){
-  const desired=!!checkbox.checked;
+  const item=menuData.find(m=>String(m.id)===String(id));
+  const forcedOff=menuItemHasUnavailableMarker(item);
+  const desired=forcedOff?false:!!checkbox.checked;
   checkbox.disabled=true;
   try{
     const {error}=await db.from(MENU_TABLE).update({is_available:desired}).eq('id',id);
     if(error)throw error;
-    const item=menuData.find(m=>String(m.id)===String(id));
     if(item)item.is_available=desired;
-    toast(`${item?.name_en||item?.name||'Item'} ${desired?'enabled':'disabled'} for customer page.`);
+    checkbox.checked=desired;
+    toast(`${item?.name_en||item?.name||'Item'} ${desired?'enabled':'disabled'} for customer page.${forcedOff?' @# items are always OFF.':''}`);
     renderCategoryManagement(selectedManagedCategory);
   }catch(e){
     checkbox.checked=!desired;
@@ -1822,7 +1839,7 @@ window.loadMenu = async function(){
     return;
   }
   await enforceMenuAvailabilityMarkers(data||[],db);
-  menuData=(data||[]).filter(menuItemIsAvailable).filter(x=>!menuItemHasUnavailableMarker(x)).slice().sort((a,b)=>
+  menuData=(data||[]).slice().sort((a,b)=>
     (Number(a.category_sort_order)||999999)-(Number(b.category_sort_order)||999999) ||
     String(a.category||'').localeCompare(String(b.category||''),undefined,{numeric:true,sensitivity:'base'}) ||
     (Number(a.item_sort_order)||999999)-(Number(b.item_sort_order)||999999) ||
