@@ -6441,9 +6441,12 @@ document.addEventListener('DOMContentLoaded',()=>{
   }
 
   window.showCustomerCallPopup=function(row,force=false){
-    if(!row||String(row.status||'pending').toLowerCase()!=='pending')return;
-    const id=String(row.id??'');
-    if(!force&&id&&id===lastShownCallId&&activeCustomerCall)return;
+    // A real D1 customer-call row must have an id. Ignore empty/fake realtime
+    // payloads so the popup can NEVER appear unless a real pending call exists.
+    if(!row || row.id === undefined || row.id === null || String(row.id)==='' )return;
+    if(String(row.status||'pending').toLowerCase()!=='pending')return;
+    const id=String(row.id);
+    if(!force&&id===lastShownCallId&&activeCustomerCall)return;
     lastShownCallId=id||lastShownCallId;
     activeCustomerCall=row;
     const table=String(row.table_id||'N/A');
@@ -6494,7 +6497,7 @@ document.addEventListener('DOMContentLoaded',()=>{
       if(customerCallChannel)return;
       customerCallChannel=cloudDB
         .channel('cashier:customer_calls:fast')
-        .on('postgres_changes',{event:'INSERT',schema:'public',table:'customer_calls'},payload=>{if(payload?.new)showCustomerCallPopup(payload.new,true)})
+        .on('postgres_changes',{event:'INSERT',schema:'public',table:'customer_calls'},payload=>{if(payload?.new?.id!==undefined && payload?.new?.id!==null)showCustomerCallPopup(payload.new,true)})
         .subscribe(status=>{if(status==='SUBSCRIBED')loadLatestPendingCustomerCall();});
       loadLatestPendingCustomerCall();
     }catch(e){
