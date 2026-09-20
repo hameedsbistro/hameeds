@@ -4703,10 +4703,22 @@ window.openCloseReportPrintWindow = function(type,date,shiftNo,snapshot,user){
       return [];
     }
 
+    // Only show active orders created TODAY (Malaysia time).
+    // Old/stale orders from previous dates must never appear when starting a new order.
+    const todayMY = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kuala_Lumpur',
+      year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(new Date());
     const matches = (r.data || []).filter(o => {
       const sameTable = String(o.table_id || '').split('/')[0].trim().toUpperCase() === tableKey;
       const unpaid = String(o.payment_status || '').toLowerCase() !== 'paid';
-      return sameTable && unpaid;
+      const createdDateMY = o.created_at
+        ? new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Asia/Kuala_Lumpur',
+            year: 'numeric', month: '2-digit', day: '2-digit'
+          }).format(new Date(o.created_at))
+        : '';
+      return sameTable && unpaid && createdDateMY === todayMY;
     });
 
     if(typeof window.waiterExistingOrdersForSelectedTable !== 'undefined'){
