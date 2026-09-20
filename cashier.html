@@ -1222,48 +1222,71 @@ window.cloudflareDB={createClient(){return {from:t=>new Q(t),storage,auth,channe
         let newOrderAlertVoiceTimer = null;
         let newOrderAlertActive = false;
         let newOrderAlertAudioContext = null;
+        let newOrderAlertAudio = null;
+        let newOrderAlertAudioUrl = null;
         let newOrderAlertSpeaking = false;
         let newOrderAlertOrderId = null;
         let newOrderAlertCurrentTable = 'Take Away';
         const newOrderAlertMutedOrderIds = new Set();
 
-        async function ensureAlertAudioReady() {
+        function createNewOrderToneUrl() {
+            if (newOrderAlertAudioUrl) return newOrderAlertAudioUrl;
             try {
-                const AC = window.AudioContext || window.webkitAudioContext;
-                if (!AC) return null;
-                if (!newOrderAlertAudioContext) newOrderAlertAudioContext = new AC();
-                if (newOrderAlertAudioContext.state === 'suspended') {
-                    try {
-                        const resumeResult = newOrderAlertAudioContext.resume();
-                        if (resumeResult && typeof resumeResult.catch === 'function') resumeResult.catch(() => {});
-                    } catch (e) {}
+                const sampleRate = 44100, duration = 0.18, frequency = 1120;
+                const samples = Math.floor(sampleRate * duration);
+                const buffer = new ArrayBuffer(44 + samples * 2);
+                const view = new DataView(buffer);
+                const write = (o, str) => { for (let i=0;i<str.length;i++) view.setUint8(o+i,str.charCodeAt(i)); };
+                write(0,'RIFF'); view.setUint32(4,36+samples*2,true); write(8,'WAVE'); write(12,'fmt ');
+                view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,1,true);
+                view.setUint32(24,sampleRate,true); view.setUint32(28,sampleRate*2,true);
+                view.setUint16(32,2,true); view.setUint16(34,16,true); write(36,'data'); view.setUint32(40,samples*2,true);
+                for(let i=0;i<samples;i++){
+                    const t=i/sampleRate, fade=Math.min(1,i/350,(samples-i)/900);
+                    const value=Math.max(-1,Math.min(1,Math.sin(2*Math.PI*frequency*t)*fade));
+                    view.setInt16(44+i*2,value*30000,true);
                 }
-                return newOrderAlertAudioContext;
-            } catch (e) {
-                console.log('Alert audio unavailable:', e);
-                return null;
-            }
+                newOrderAlertAudioUrl=URL.createObjectURL(new Blob([buffer],{type:'audio/wav'}));
+            } catch(e) { newOrderAlertAudioUrl=null; }
+            return newOrderAlertAudioUrl;
+        }
+
+        function ensureAlertAudioReady() {
+            try {
+                if (!newOrderAlertAudio) {
+                    const src=createNewOrderToneUrl();
+                    if(src){ newOrderAlertAudio=new Audio(src); newOrderAlertAudio.preload='auto'; newOrderAlertAudio.volume=1; }
+                }
+                if(newOrderAlertAudio) newOrderAlertAudio.load();
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (AC) {
+                    if (!newOrderAlertAudioContext) newOrderAlertAudioContext = new AC();
+                    if (newOrderAlertAudioContext.state === 'suspended') newOrderAlertAudioContext.resume().catch(()=>{});
+                }
+            } catch (e) {}
+            try { if ('speechSynthesis' in window) window.speechSynthesis.getVoices(); } catch(e) {}
         }
 
         function playNewOrderBeep() {
-            ensureAlertAudioReady().then(ctx => {
-                if (!ctx || !newOrderAlertActive) return;
-                try {
-                    const now = ctx.currentTime;
-                    const osc = ctx.createOscillator();
-                    const gain = ctx.createGain();
-                    osc.type = 'square';
-                    osc.frequency.setValueAtTime(1120, now);
-                    gain.gain.setValueAtTime(0.0001, now);
-                    gain.gain.exponentialRampToValueAtTime(1.0, now + 0.008);
-                    gain.gain.setValueAtTime(1.0, now + 0.121);
-                    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.1595);
-                    osc.connect(gain);
-                    gain.connect(ctx.destination);
-                    osc.start(now);
-                    osc.stop(now + 0.165);
-                } catch (e) {}
-            });
+            if (!newOrderAlertActive) return;
+            try {
+                if(!newOrderAlertAudio) ensureAlertAudioReady();
+                if(newOrderAlertAudio){
+                    newOrderAlertAudio.pause();
+                    newOrderAlertAudio.currentTime=0;
+                    const p=newOrderAlertAudio.play();
+                    if(p&&typeof p.catch==='function')p.catch(()=>{});
+                    return;
+                }
+            } catch(e) {}
+            try {
+                const ctx=newOrderAlertAudioContext;
+                if(!ctx)return;
+                const now=ctx.currentTime,o=ctx.createOscillator(),g=ctx.createGain();
+                o.type='square';o.frequency.value=1120;g.gain.setValueAtTime(.0001,now);
+                g.gain.exponentialRampToValueAtTime(.9,now+.008);g.gain.exponentialRampToValueAtTime(.0001,now+.16);
+                o.connect(g);g.connect(ctx.destination);o.start(now);o.stop(now+.17);
+            } catch(e) {}
         }
 
         function speakNewOrder(tableId) {
@@ -1428,13 +1451,25 @@ window.cloudflareDB={createClient(){return {from:t=>new Q(t),storage,auth,channe
             try {
                 cloudDB
                     .channel('public:orders')
-                    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, payload => {
-                        loadPendingOrders();
-                        fetchIncomingOrders(true);
-                        const row = payload && payload.new ? payload.new : null;
-                        if (row && String(row.status || '').toLowerCase() === 'pending' && !newOrderAlertMutedOrderIds.has(String(row.id))) {
-                            startNewOrderAlert(row);
-                        }
+                    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, async payload => {
+                        // Fast internal check: query every second, but redraw the page only when
+                        // the pending-order set actually changes. This prevents visible blinking.
+                        try {
+                            const r = await cloudDB.from('orders').select('*').eq('status','pending').order('created_at',{ascending:false});
+                            const rows = Array.isArray(r.data) ? r.data : [];
+                            const ids = rows.map(o=>String(o.id));
+                            const signature = ids.join('|');
+                            if(signature !== window.__hameedsPendingSignature){
+                                window.__hameedsPendingSignature = signature;
+                                await fetchIncomingOrders(true);
+                            }
+                            const row = payload && payload.new ? payload.new : null;
+                            if (row && String(row.status || '').toLowerCase() === 'pending' && !newOrderAlertMutedOrderIds.has(String(row.id))) startNewOrderAlert(row);
+                            else {
+                                const newest = rows.find(o=>!newOrderAlertMutedOrderIds.has(String(o.id)) && !knownPendingOrderIds.has(String(o.id)));
+                                if(newest) startNewOrderAlert(newest);
+                            }
+                        } catch(e) {}
                     })
                     .subscribe();
             } catch (e) {
