@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kitchen Display - Hameeds Bistro</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+ body{background:#eef1f5;font-family:Arial,sans-serif}
+ .receipt{background:#fff;border:1px solid #d8dde5;border-radius:14px;box-shadow:0 3px 12px rgba(0,0,0,.08);overflow:hidden}
+ .receipt-head{background:#111827;color:#fff;padding:12px 14px}
+ .receipt-body{padding:14px}
+ .item-row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px dashed #d1d5db;font-size:16px}
+ .new-receipt{border:3px solid #f59e0b}
+ .new-badge{background:#f59e0b;color:#111827}
+ #historyContainer{align-content:start;grid-auto-rows:max-content;min-height:0}
+ #historyContainer .receipt{min-width:0}
+ @media(min-width:1024px){#historyContainer{grid-template-columns:repeat(4,minmax(0,1fr))}}
+ @media(max-width:640px){.item-row{font-size:15px}.receipt-body{padding:11px}}
+</style>
+
+<style id="kitchen-all-sections-modifier-final">
+  #kitchenFilter option[value="__ALL__"]{font-weight:900}
+  .kitchen-modifier-line{color:#1d4ed8;font-weight:900}
+  .kitchen-note-line{color:#b91c1c;font-weight:900}
+</style>
+<script>
+/* RMP POS Cloudflare D1/R2 compatibility layer. Cloudflare D1 removed. */
+(()=>{
+const API='https://pos-menu.prokashofficial-kolkata.workers.dev';
+const TOKEN_KEY='rmp_cf_staff_token';
+const token=()=>localStorage.getItem(TOKEN_KEY)||'';
+async function call(path,opt={}){const h={'Content-Type':'application/json',...(opt.headers||{})};if(token())h['X-RMP-Staff-Token']=token();const r=await fetch(API+path,{...opt,headers:h});let j;try{j=await r.json()}catch{j={ok:false,error:'Invalid API response'}}if(!r.ok) return {data:null,error:{message:j.error||('HTTP '+r.status),code:r.status}};return j;}
+class Q{constructor(t){this.t=t;this.op='select';this.cols='*';this.filters=[];this.orders=[];this.lim=null;this.payload=null;this.mode='many';}
+ select(c='*'){this.cols=c;return this} insert(p){this.op='insert';this.payload=p;return this} upsert(p){this.op='upsert';this.payload=p;return this} update(p){this.op='update';this.payload=p;return this} delete(){this.op='delete';return this}
+ f(op,c,v,x){this.filters.push({op,column:c,value:v,extra:x});return this} eq(c,v){return this.f('eq',c,v)} neq(c,v){return this.f('neq',c,v)} in(c,v){return this.f('in',c,v)} gte(c,v){return this.f('gte',c,v)} lte(c,v){return this.f('lte',c,v)} ilike(c,v){return this.f('ilike',c,v)} is(c,v){return this.f('is',c,v)} not(c,op,v){return this.f('not',c,v,op)} match(o){Object.entries(o||{}).forEach(([k,v])=>this.eq(k,v));return this}
+ order(c,o={}){this.orders.push({column:c,ascending:o.ascending!==false});return this} limit(n){this.lim=n;return this} single(){this.mode='single';return this} maybeSingle(){this.mode='maybeSingle';return this}
+ async exec(){
+  const pass=this.filters.find(x=>x.column==='password'&&x.op==='eq'); const email=this.filters.find(x=>x.column==='email'&&x.op==='eq');
+  if(this.op==='select'&&pass&&email&&(this.t==='profiles'||this.t==='customers')){const ep=this.t==='profiles'?'/api/auth/staff-login':'/api/auth/customer-login';const z=await call(ep,{method:'POST',body:JSON.stringify({email:email.value,password:pass.value})});if(z.error)return z;if(z.token&&this.t==='profiles')localStorage.setItem(TOKEN_KEY,z.token);return {data:z.user,error:null};}
+  const z=await call('/api/data',{method:'POST',body:JSON.stringify({table:this.t,operation:this.op,select:this.cols,filters:this.filters,orders:this.orders,limit:this.lim,payload:this.payload,mode:this.mode})});
+  if(z.error)return z;return {data:z.data,error:null,count:z.count};
+ }
+ then(a,b){return this.exec().then(a,b)}
+}
+const storage={from(bucket){return {async upload(path,file){const fd=new FormData();fd.append('file',file);fd.append('path',path);const h={};if(token())h['X-RMP-Staff-Token']=token();const r=await fetch(API+'/api/storage/upload',{method:'POST',headers:h,body:fd});const j=await r.json();return r.ok?{data:j.data,error:null}:{data:null,error:{message:j.error}}},getPublicUrl(path){return {data:{publicUrl:'https://pub-404ee6980d804bcbba9aafdaf936ccb6.r2.dev/'+String(path).replace(/^\/+/, '')}}},async remove(paths){const z=await call('/api/storage/remove',{method:'POST',body:JSON.stringify({paths})});return z.error?z:{data:z.data,error:null}}}}};
+const auth={async signUp({email,password}){return {data:{user:{email}},error:null}},async signOut(){localStorage.removeItem(TOKEN_KEY);return {error:null}}};
+function channel(){let timers=[];let handlers=[];return {on(type,filter,cb){handlers.push({type,filter,cb});return this},subscribe(){const tick=()=>{if(document.visibilityState!=="visible")return;handlers.forEach(h=>{try{h.cb({eventType:"UPDATE",new:{},old:{}})}catch(e){}})};timers.push(setInterval(tick,8000));return this},unsubscribe(){timers.forEach(clearInterval);timers=[];return Promise.resolve()},};}
+window.cloudflareDB={createClient(){return {from:t=>new Q(t),storage,auth,channel,removeChannel:()=>{},removeAllChannels:()=>{}}}};
+})();
+</script>
+</head>
+<body class="min-h-screen">
+<div id="kitchenLoginScreen" class="fixed inset-0 z-[99999] bg-slate-950 flex items-center justify-center p-4">
+ <div class="w-full max-w-md bg-white rounded-3xl shadow-2xl p-7">
+  <div class="text-center mb-6">
+   <img src="images/logo.jpg" class="w-20 h-20 rounded-full object-cover border-2 border-amber-500 mx-auto mb-3" onerror="this.style.display='none'">
+   <h1 class="text-2xl font-black text-slate-900">Hameeds Bistro</h1>
+   <p class="text-sm text-slate-500 mt-1">Kitchen Display Login</p>
+  </div>
+  <form id="kitchenLoginForm" class="space-y-4">
+   <div><label class="text-xs font-bold text-slate-700">Email</label><input id="kitchenLoginEmail" type="email" required autocomplete="username" class="mt-1 w-full border rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-500"></div>
+   <div><label class="text-xs font-bold text-slate-700">Password</label><input id="kitchenLoginPassword" type="password" required autocomplete="current-password" class="mt-1 w-full border rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-500"></div>
+   <div id="kitchenLoginError" class="hidden text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl p-3"></div>
+   <button class="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold rounded-xl py-3">Login to Kitchen Display</button>
+  </form>
+  <p class="text-[11px] text-slate-400 text-center mt-5">Access: Cook, Manager and Admin only.</p>
+ </div>
+</div>
+
+<header class="bg-slate-900 text-white px-4 py-3 shadow-lg">
+ <div class="max-w-[1800px] mx-auto flex flex-wrap items-center justify-between gap-3">
+  <div class="flex items-center gap-3">
+   <img src="images/logo.jpg" class="h-10 w-10 rounded-full object-cover border-2 border-yellow-400" onerror="this.style.display='none'">
+   <div><div class="font-extrabold text-lg">RESTORAN HAMEED'S BISTRO</div><div class="text-xs text-slate-300">KITCHEN DISPLAY</div></div>
+  </div>
+  <div class="flex flex-wrap items-center gap-2">
+   <div class="text-right mr-1 hidden sm:block"><div id="kitchenUserName" class="text-xs font-extrabold">-</div><div id="kitchenUserRole" class="text-[10px] text-amber-300 uppercase">-</div></div>
+   <button onclick="doKitchenCheckIn()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold px-3 py-2 rounded-lg text-xs">CHECK-IN</button>
+   <button onclick="doKitchenCheckOut()" class="bg-red-600 hover:bg-red-500 text-white font-extrabold px-3 py-2 rounded-lg text-xs">CHECK-OUT</button>
+   <label class="text-sm font-bold">Select Section</label>
+   <select id="kitchenFilter" onchange="fetchKitchenOrders()" class="text-slate-900 bg-white rounded-lg px-3 py-2 font-bold min-w-[180px]"><option value="">Select Section</option></select>
+   <button onclick="openHistory()" class="bg-amber-500 hover:bg-amber-400 text-slate-900 font-extrabold px-4 py-2 rounded-lg">HISTORY</button>
+   <button onclick="kitchenLogout()" class="bg-slate-700 hover:bg-slate-600 text-white font-extrabold px-3 py-2 rounded-lg text-xs">LOGOUT</button>
+  </div>
+ </div>
+</header>
+<main class="max-w-[1800px] mx-auto p-3 sm:p-5">
+ <div class="flex items-center justify-between mb-4"><h1 class="text-xl sm:text-2xl font-extrabold">Current Kitchen Orders</h1><span id="liveStatus" class="text-xs font-bold bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full">REALTIME</span></div>
+ <div id="ordersContainer" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4"></div>
+</main>
+<div id="historyModal" class="hidden fixed inset-0 bg-black/60 z-50 p-3 sm:p-6">
+ <div class="bg-white rounded-2xl max-w-6xl mx-auto h-full max-h-[92vh] overflow-hidden flex flex-col">
+  <div class="p-4 border-b flex flex-wrap justify-between items-center gap-3">
+   <div><h2 class="text-xl font-extrabold">Kitchen History</h2><p class="text-xs text-gray-500">Completed/Ready kitchen orders</p></div>
+   <div class="flex gap-2 items-center"><input id="historyDate" type="date" class="border rounded-lg px-3 py-2" onchange="fetchHistory()"><button onclick="closeHistory()" class="bg-slate-800 text-white px-4 py-2 rounded-lg font-bold">Close</button></div>
+  </div>
+  <div id="historyContainer" class="p-4 overflow-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"></div>
+ </div>
+</div>
+<script>
+        const CLOUDFLARE_API = 'https://pos-menu.prokashofficial-kolkata.workers.dev';
+const cloudDB=cloudflareDB.createClient();
+
+// Versioned KDS state. A new namespace prevents broken/old batches from older
+// versions of the page from reappearing.
+const KDS_VERSION='v7';
+function selectedSectionKey(){
+ const el=document.getElementById('kitchenFilter');
+ return String(el?.value||'none').replace(/[^a-zA-Z0-9_-]/g,'_');
+}
+const stateKey=(type,id,sectionKey=selectedSectionKey())=>`kds_${KDS_VERSION}_${sectionKey}_${type}_${String(id)}`;
+const snapshotKey=(id,sectionKey)=>stateKey('snapshot',id,sectionKey);
+const batchesKey=(id,sectionKey)=>stateKey('batches',id,sectionKey);
+const readyKey=(id,sectionKey)=>stateKey('ready',id,sectionKey);
+let assignedCache=new Map();
+let kitchenFetchRunning=false;
+let kitchenFetchAgain=false;
+let kitchenAlertAudioContext=null;
+const kitchenAlertedBatchIds=new Set();
+
+async function ensureKitchenAlertAudio(){
+  try{
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(!AC)return null;
+    if(!kitchenAlertAudioContext)kitchenAlertAudioContext=new AC();
+    if(kitchenAlertAudioContext.state==='suspended'){
+      try{await kitchenAlertAudioContext.resume();}catch(e){}
+    }
+    return kitchenAlertAudioContext;
+  }catch(e){return null;}
+}
+
+async function kitchenTripleBeep(){
+  const ctx=await ensureKitchenAlertAudio();
+  if(!ctx)return;
+  const base=ctx.currentTime;
+  [0,.58,1.16].forEach(offset=>{
+    try{
+      const osc=ctx.createOscillator(),gain=ctx.createGain();
+      osc.type='square';osc.frequency.setValueAtTime(1180,base+offset);
+      gain.gain.setValueAtTime(.0001,base+offset);
+      gain.gain.exponentialRampToValueAtTime(.85,base+offset+.02);
+      gain.gain.setValueAtTime(.85,base+offset+.30);
+      gain.gain.exponentialRampToValueAtTime(.0001,base+offset+.42);
+      osc.connect(gain);gain.connect(ctx.destination);
+      osc.start(base+offset);osc.stop(base+offset+.44);
+    }catch(e){}
+  });
+  await new Promise(r=>setTimeout(r,1750));
+}
+
+function kitchenSpeakOnce(tableId){
+  return new Promise(resolve=>{
+    if(!('speechSynthesis' in window)){resolve();return;}
+    try{
+      const table=String(tableId||'N A').trim();
+      const u=new SpeechSynthesisUtterance(`Hameeds Bistro. New kitchen order from table ${table}.`);
+      u.lang='en-US';u.rate=.88;u.pitch=1;u.volume=1;
+      u.onend=resolve;u.onerror=resolve;
+      speechSynthesis.cancel();
+      speechSynthesis.speak(u);
+    }catch(e){resolve();}
+  });
+}
+
+async function playKitchenNewOrderAlert(tableId,batchId){
+  const key=String(batchId||'');
+  if(!key||kitchenAlertedBatchIds.has(key))return;
+  kitchenAlertedBatchIds.add(key);
+  await kitchenTripleBeep();
+  await kitchenSpeakOnce(tableId);
+}
+
+
+function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
+function malaysiaDate(){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kuala_Lumpur',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());}
+function itemKey(i){return `${i.menu_item_id}|${Number(i.price||0).toFixed(2)}|${JSON.stringify(i.modifiers||null)}|${String(i.item_note||i.modifier_notes||'')}`;}
+function readJson(k,fallback){try{const x=localStorage.getItem(k);return x?JSON.parse(x):fallback}catch{return fallback;}}
+function writeJson(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){console.warn('KDS local storage:',e);}}
+function getSnapshot(id){return readJson(snapshotKey(id),{});}
+function saveSnapshot(id,v){writeJson(snapshotKey(id),v);}
+function getBatches(id){return readJson(batchesKey(id),[]);}
+function saveBatches(id,v){writeJson(batchesKey(id),v);}
+function getReady(id){return readJson(readyKey(id),[]);}
+function saveReady(id,v){writeJson(readyKey(id),v);}
+
+function actorLabel(order){
+ const v=order.ordered_by||order.created_by_name||order.created_by||order.customer_name||order.customer||order.customerName;
+ if(v)return String(v);
+ const source=String(order.source||order.order_source||'').toLowerCase();
+ if(source.includes('customer'))return order.customer_name?`Customer (${order.customer_name})`:'Customer';
+ return 'Cashier';
+}
+function itemActor(item,order){return item.added_by_name||item.added_by||item.ordered_by||item.created_by_name||item.created_by||actorLabel(order);}
+
+async function fetchKitchenSections(){
+ const sel=document.getElementById('kitchenFilter');
+ const {data,error}=await cloudDB.from('kitchen_sections').select('*').order('id');
+ if(error){console.error('Kitchen sections:',error);return;}
+ sel.innerHTML='<option value="">Select Section</option><option value="__ALL__">ALL SECTIONS</option>';
+ (data||[]).forEach(x=>sel.insertAdjacentHTML('beforeend',`<option value="${esc(x.id)}">${esc(x.section_name||x.name||'Section')}</option>`));
+}
+async function assignedCategories(sectionId){
+ if(!sectionId)return new Set();
+ if(String(sectionId)==='__ALL__')return null;
+ const key=String(sectionId);
+ if(assignedCache.has(key))return assignedCache.get(key);
+ const r=await cloudDB.from('kitchen_section_categories').select('category').eq('kitchen_section_id',sectionId);
+ if(r.error){
+  console.error('Kitchen category mapping error:',r.error.message);
+  const empty=new Set(); assignedCache.set(key,empty); return empty;
+ }
+ const set=new Set((r.data||[]).map(x=>String(x.category||'').trim().toLowerCase()).filter(Boolean));
+ assignedCache.set(key,set);
+ return set;
+}
+
+function makeCurrentMap(items){
+ const map={};
+ for(const i of items){
+  const k=itemKey(i);
+  map[k]=(map[k]||0)+Number(i.quantity||0);
+ }
+ return map;
+}
+function deltaItems(items,oldMap){
+ const out={};
+ for(const i of items){
+  const k=itemKey(i), old=Number(oldMap[k]||0), qty=Number(i.quantity||0), delta=qty-old;
+  if(delta>0){
+   if(!out[k])out[k]={...i,quantity:delta};
+   else out[k].quantity+=delta;
+  }
+ }
+ return Object.values(out);
+}
+function batchId(orderId){return `b_${String(orderId)}_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;}
+
+async function fetchKitchenOrders(shouldSound=false){
+ if(kitchenFetchRunning){kitchenFetchAgain=true;return;}
+ kitchenFetchRunning=true;
+ try{
+  const selected=document.getElementById('kitchenFilter').value;
+  const sectionKey=selectedSectionKey();
+  const c=document.getElementById('ordersContainer');
+  c.innerHTML='';
+  if(!selected)return;
+
+  const mapped=await assignedCategories(selected);
+  const isAllSections=String(selected)==='__ALL__';
+  if(!isAllSections && (!mapped || !mapped.size)){
+   c.innerHTML='<div class="col-span-full text-center text-gray-500 py-12 font-semibold">No categories mapped to this kitchen section.</div>';
+   return;
+  }
+
+  const {data:orders,error}=await cloudDB.from('orders')
+   .select(`*,order_items(*,menu_items(name_en,category,kitchen_section_id))`)
+   .in('status',['accepted','preparing'])
+   .order('created_at',{ascending:true});
+  if(error){
+   c.innerHTML=`<div class="col-span-full text-center text-red-600 py-10">Failed to load kitchen orders: ${esc(error.message)}</div>`;
+   return;
+  }
+
+  let any=false;
+  for(const o of (orders||[])){
+   const items=(o.order_items||[])
+    .filter(i=>i.menu_items && !i.is_cancelled && Number(i.quantity||0)>0)
+    .filter(i=>isAllSections || mapped.has(String(i.menu_items.category||'').trim().toLowerCase()));
+   if(!items.length)continue;
+
+   const id=String(o.id);
+   let batches=getBatchesFor(id,sectionKey);
+   let ready=getReadyFor(id,sectionKey);
+   const snapshot=getSnapshotFor(id,sectionKey);
+   const current=makeCurrentMap(items);
+
+   if(Object.keys(snapshot).length===0 && batches.length===0){
+    const firstBatch={
+     id:`initial_${id}_${sectionKey}`,
+     order_id:id,label:'NEW ORDER',
+     created_at:o.created_at||new Date().toISOString(),
+     table_id:o.table_id||o.table_number||'N/A',
+     items:items.map(i=>({...i,menu_items:{...(i.menu_items||{})}})),
+     actor:actorLabel(o)
+    };
+    batches=[firstBatch];
+    if(shouldSound)playKitchenNewOrderAlert(firstBatch.table_id,firstBatch.id);
+   }else{
+    const newItems=deltaItems(items,snapshot);
+    if(newItems.length){
+     const signature=newItems.map(i=>itemKey(i)+':'+Number(i.quantity||0)).sort().join('||');
+     const deltaId=`delta_${id}_${sectionKey}_${simpleHash(signature+'|'+JSON.stringify(current))}`;
+     if(!batches.some(b=>String(b.id)===deltaId)){
+      const actors=[...new Set(newItems.map(i=>String(itemActor(i,o))).filter(Boolean))];
+      const deltaBatch={
+       id:deltaId,order_id:id,label:'NEW ITEMS',created_at:new Date().toISOString(),
+       table_id:o.table_id||o.table_number||'N/A',
+       items:newItems.map(i=>({...i,menu_items:{...(i.menu_items||{})}})),
+       actor:actors.length===1?actors[0]:actorLabel(o)
+      };
+      batches.push(deltaBatch);
+      if(shouldSound)playKitchenNewOrderAlert(deltaBatch.table_id,deltaBatch.id);
+     }
+    }
+   }
+
+   saveSnapshotFor(id,current,sectionKey);
+
+   const uniq=new Map();
+   for(const b of batches)if(!uniq.has(String(b.id)))uniq.set(String(b.id),b);
+   batches=[...uniq.values()];
+
+   const batchIds=new Set(batches.map(b=>String(b.id)));
+   ready=ready.filter(x=>batchIds.has(String(x)));
+   saveReadyFor(id,ready,sectionKey);
+   saveBatchesFor(id,batches,sectionKey);
+
+   for(const b of batches.filter(b=>!ready.includes(String(b.id)))){
+    any=true;
+    c.insertAdjacentHTML('beforeend',receiptHtml(o,b,0,b.actor));
+   }
+  }
+  if(!any)c.innerHTML='<div class="col-span-full text-center text-gray-500 py-12 font-semibold">No current kitchen orders.</div>';
+ }finally{
+  kitchenFetchRunning=false;
+  if(kitchenFetchAgain){kitchenFetchAgain=false;setTimeout(fetchKitchenOrders,60);}
+ }
+}
+function simpleHash(str){let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)}return(h>>>0).toString(36)}
+function getSnapshotFor(id,s){return readJson(snapshotKey(id,s),{})}
+function saveSnapshotFor(id,v,s){writeJson(snapshotKey(id,s),v)}
+function getBatchesFor(id,s){return readJson(batchesKey(id,s),[])}
+function saveBatchesFor(id,v,s){writeJson(batchesKey(id,s),v)}
+function getReadyFor(id,s){return readJson(readyKey(id,s),[])}
+function saveReadyFor(id,v,s){writeJson(readyKey(id,s),v)}
+
+
+function kitchenModifierLabels(value){
+ const mods=Array.isArray(value)?value:[];
+ return mods.map(x=>{
+   if(typeof x==='string')return x.trim();
+   if(!x || typeof x!=='object')return '';
+   const text=String(x.text||x.name||x.modifier_name||x.label||'Modifier').trim();
+   const price=Number(x.price??x.modifier_price??x.amount??0);
+   return price!==0 ? `${text} (${price>0?'+':''}RM${price.toFixed(2)})` : text;
+ }).filter(Boolean);
+}
+
+function receiptHtml(o,b,index,actor){
+ const orderTime=new Date(o.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+ const batchTime=new Date(b.created_at||o.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+ const isNew=b.label==='NEW ITEMS';
+ const rows=(b.items||[]).map(i=>{
+ const note=String(i.item_note||i.modifier_notes||'').trim();
+ const mods=kitchenModifierLabels(i.modifiers);
+ const status=String(i.item_status||'processing').toLowerCase()==='ready'?'READY':'PROCESSING';
+ return `<div class="item-row"><div class="min-w-0"><span class="font-bold">${esc(i.menu_items?.name_en||'Item')}</span><div class="text-[10px] mt-1 font-extrabold ${status==='READY'?'text-emerald-700':'text-amber-700'}">${status}</div>${mods.length?`<div class="kitchen-modifier-line text-xs mt-1">MODIFY: ${esc(mods.join(', '))}</div>`:''}${note?`<div class="kitchen-note-line text-xs mt-1">NOTE: ${esc(note)}</div>`:''}</div><span class="font-extrabold text-red-600">× ${Number(i.quantity||0)}</span></div>`;
+}).join('');
+ const safeOrder=JSON.stringify(String(o.id));
+ const safeBatch=JSON.stringify(String(b.id));
+ return `<article class="receipt ${isNew?'new-receipt':''}">
+ <div class="receipt-head">
+  <div class="flex justify-between gap-2"><span class="font-extrabold text-lg">#${esc(o.id)}</span><span class="text-xs font-bold">${esc(b.label)}</span></div>
+  <div class="text-sm mt-1">Table: <b>${esc(o.table_id||'N/A')}</b></div>
+  <div class="text-xs text-slate-300 mt-1">Order Time: ${orderTime}</div>
+  <div class="text-xs text-slate-300 mt-1">Ordered By: <b class="text-white">${esc(actor||actorLabel(o))}</b></div>
+  <div class="text-xs text-slate-300 mt-1">Receipt Time: ${batchTime}</div>
+ </div>
+ <div class="receipt-body">
+  <div class="mb-2 text-xs text-gray-500 font-bold">${isNew?'NEW ITEMS ADDED':'NEW ORDER ITEMS'}</div>
+  ${rows}
+  ${isNew?'<div class="mt-2 text-[10px] font-bold text-amber-700">Only the newly added items are shown on this receipt.</div>':''}
+  <button type="button" onclick='markReady(${safeOrder},${safeBatch})' class="mt-4 w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-2.5 rounded-lg">MARK READY</button>
+ </div>
+ </article>`;
+}
+
+// IMPORTANT: Ready is PER RECEIPT/BATCH. It never updates the whole order.
+async function markReady(orderId,batchIdValue){
+ const id=String(orderId),bid=String(batchIdValue),sectionKey=selectedSectionKey();
+ const batches=getBatchesFor(id,sectionKey);
+ const batch=batches.find(b=>String(b.id)===bid);
+ if(!batch){alert('Kitchen receipt not found. Please refresh and try again.');return;}
+
+ const itemIds=[...new Set((batch.items||[]).map(i=>i.id).filter(v=>v!==null&&v!==undefined))];
+ if(!itemIds.length){alert('No database item IDs found for this receipt.');return;}
+
+ let s={};try{s=kitchenSession()||{};}catch(e){}
+ const now=new Date().toISOString();
+ const readyBy=s.full_name||s.name||s.email||'Kitchen';
+
+ let r=await cloudDB.from('order_items').update({
+   item_status:'ready',
+   ready_at:now,
+   ready_by_name:readyBy,
+   ready_by_email:s.email||null
+ }).in('id',itemIds);
+ if(r.error)r=await cloudDB.from('order_items').update({item_status:'ready'}).in('id',itemIds);
+ if(r.error){alert('Could not mark items ready: '+r.error.message);return;}
+
+ const ready=getReadyFor(id,sectionKey);
+ if(!ready.includes(bid))ready.push(bid);
+ saveReadyFor(id,ready,sectionKey);
+ await fetchKitchenOrders(false);
+}
+function openHistory(){
+ document.getElementById('historyDate').value=malaysiaDate();
+ document.getElementById('historyModal').classList.remove('hidden');
+ fetchHistory();
+}
+function closeHistory(){document.getElementById('historyModal').classList.add('hidden');}
+async function fetchHistory(){
+ const d=document.getElementById('historyDate').value||malaysiaDate();
+ const c=document.getElementById('historyContainer');
+ const sectionKey=selectedSectionKey();
+ c.innerHTML='';
+ if(sectionKey==='none'){c.innerHTML='<div class="col-span-full text-center text-gray-500 py-10">Select a kitchen section first.</div>';return;}
+
+ const allReady=[];
+ const prefix=`kds_${KDS_VERSION}_${sectionKey}_batches_`;
+ const keys=[];
+ for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i)||'';if(k.startsWith(prefix))keys.push(k)}
+ for(const k of keys){
+  const orderId=k.slice(prefix.length),batches=readJson(k,[]);
+  const ready=readJson(readyKey(orderId,sectionKey),[]).map(String),seen=new Set();
+  for(const b of batches){
+   const bid=String(b.id);
+   if(seen.has(bid)||!ready.includes(bid))continue;
+   seen.add(bid);
+   if(malaysiaDateFor(b.created_at)!==d)continue;
+   allReady.push({orderId,b});
+  }
+ }
+ allReady.sort((a,b)=>new Date(b.b.created_at||0)-new Date(a.b.created_at||0));
+ if(!allReady.length){c.innerHTML='<div class="col-span-full text-center text-gray-500 py-10">No READY receipt history for this date and section.</div>';return;}
+ for(const entry of allReady){
+  const b=entry.b,receiptTime=new Date(b.created_at||Date.now()).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  const rows=(b.items||[]).map(i=>{
+   const note=String(i.item_note||i.modifier_notes||'').trim();
+   const mods=kitchenModifierLabels(i.modifiers);
+   return `<div class="item-row"><div class="min-w-0"><span class="font-bold">${esc(i.menu_items?.name_en||i.item_name||'Item')}</span>${mods.length?`<div class="kitchen-modifier-line text-xs mt-1">MODIFY: ${esc(mods.join(', '))}</div>`:''}${note?`<div class="kitchen-note-line text-xs mt-1">NOTE: ${esc(note)}</div>`:''}</div><b>× ${Number(i.quantity||0)}</b></div>`;
+  }).join('');
+  c.insertAdjacentHTML('beforeend',`<article class="receipt"><div class="receipt-head"><div class="flex justify-between gap-2"><span class="font-extrabold text-lg">#${esc(entry.orderId)}</span><span class="text-xs font-bold">${esc(b.label||'READY')}</span></div><div class="text-sm mt-1">Table: <b>${esc(b.table_id||'N/A')}</b></div><div class="text-xs text-slate-300 mt-1">Receipt Time: ${receiptTime}</div><div class="text-xs text-slate-300 mt-1">Ordered By: <b class="text-white">${esc(b.actor||'')}</b></div></div><div class="receipt-body">${rows}<div class="mt-3 text-xs font-extrabold text-emerald-700">✓ READY</div></div></article>`);
+ }
+}
+function malaysiaDateFor(value){
+ return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kuala_Lumpur',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value));
+}
+
+function subscribeRealtime(){
+ cloudDB.channel('kds-orders-v8-sound')
+  .on('postgres_changes',{event:'*',schema:'public',table:'orders'},()=>fetchKitchenOrders(true))
+  .on('postgres_changes',{event:'*',schema:'public',table:'order_items'},()=>fetchKitchenOrders(true))
+  .subscribe(status=>{document.getElementById('liveStatus').textContent=status==='SUBSCRIBED'?'REALTIME':'RECONNECTING';});
+}
+
+const KITCHEN_SESSION_KEY='kitchen_session';
+let kitchenRealtimeStarted=false;
+function kitchenSession(){try{return JSON.parse(localStorage.getItem(KITCHEN_SESSION_KEY)||'null')}catch(e){return null}}
+function kitchenRoleAllowed(role){return ['cook','manager','admin'].includes(String(role||'').trim().toLowerCase())}
+function kitchenName(p){return p?.full_name||p?.name||p?.email||'Staff'}
+function showKitchenLogin(message=''){
+ document.getElementById('kitchenLoginScreen').classList.remove('hidden');
+ const err=document.getElementById('kitchenLoginError');
+ if(message){err.textContent=message;err.classList.remove('hidden')}else{err.textContent='';err.classList.add('hidden')}
+}
+function showKitchenApp(s){
+ document.getElementById('kitchenLoginScreen').classList.add('hidden');
+ document.getElementById('kitchenUserName').textContent=kitchenName(s);
+ document.getElementById('kitchenUserRole').textContent=s.role||'';
+}
+async function validateKitchenSession(){
+ const s=kitchenSession();if(!s?.email)return null;
+ const {data,error}=await cloudDB.from('profiles').select('*').eq('email',s.email).maybeSingle();
+ if(error||!data||!kitchenRoleAllowed(data.role)){localStorage.removeItem(KITCHEN_SESSION_KEY);return null}
+ localStorage.setItem(KITCHEN_SESSION_KEY,JSON.stringify(data));return data;
+}
+async function startKitchenAfterLogin(s){
+ showKitchenApp(s);await fetchKitchenSections();
+ if(!kitchenRealtimeStarted){subscribeRealtime();kitchenRealtimeStarted=true}
+ await fetchKitchenOrders();
+}
+document.getElementById('kitchenLoginForm').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const email=document.getElementById('kitchenLoginEmail').value.trim(),password=document.getElementById('kitchenLoginPassword').value,err=document.getElementById('kitchenLoginError');
+ err.classList.add('hidden');
+ const {data,error}=await cloudDB.from('profiles').select('*').eq('email',email).eq('password',password).maybeSingle();
+ if(error||!data){err.textContent='Invalid email or password.';err.classList.remove('hidden');return}
+ if(!kitchenRoleAllowed(data.role)){err.textContent='Access denied. Only Cook, Manager and Admin can login to Kitchen Display.';err.classList.remove('hidden');return}
+ localStorage.setItem(KITCHEN_SESSION_KEY,JSON.stringify(data));document.getElementById('kitchenLoginPassword').value='';await ensureKitchenAlertAudio();await startKitchenAfterLogin(data);
+});
+window.kitchenLogout=function(){
+ localStorage.removeItem(KITCHEN_SESSION_KEY);
+ document.getElementById('kitchenFilter').value='';document.getElementById('ordersContainer').innerHTML='';
+ showKitchenLogin('You have been logged out. Please login again.');
+};
+function kitchenLocalDate(){const n=new Date(),y=n.getFullYear(),m=String(n.getMonth()+1).padStart(2,'0'),d=String(n.getDate()).padStart(2,'0');return`${y}-${m}-${d}`}
+window.doKitchenCheckIn=async function(){
+ const s=kitchenSession();if(!s?.email){showKitchenLogin('Please login first.');return}
+ const workDate=kitchenLocalDate();
+ const {data:open,error}=await cloudDB.from('attendance').select('id').eq('staff_email',s.email).eq('work_date',workDate).not('check_in','is',null).is('check_out',null).limit(1);
+ if(error){alert('Check-In failed: '+error.message);return}
+ if(open?.length){alert('You are already checked in today.');return}
+ const ins=await cloudDB.from('attendance').insert([{staff_id:s.id!=null?String(s.id):null,staff_name:kitchenName(s),staff_email:s.email,role:s.role||'Cook',work_date:workDate,check_in:new Date().toISOString(),check_out:null,status:'Present'}]);
+ if(ins.error){alert('Check-In failed: '+ins.error.message);return}
+ alert(`Check-In saved successfully for ${kitchenName(s)}.`);
+};
+window.doKitchenCheckOut=async function(){
+ const s=kitchenSession();if(!s?.email){showKitchenLogin('Please login first.');return}
+ const workDate=kitchenLocalDate();
+ const {data,error}=await cloudDB.from('attendance').select('id').eq('staff_email',s.email).eq('work_date',workDate).not('check_in','is',null).is('check_out',null).order('check_in',{ascending:false}).limit(1);
+ if(error){alert('Check-Out failed: '+error.message);return}
+ if(!data?.length){alert('No open Check-In record found for today.');return}
+ const upd=await cloudDB.from('attendance').update({check_out:new Date().toISOString(),status:'Completed'}).eq('id',data[0].id);
+ if(upd.error){alert('Check-Out failed: '+upd.error.message);return}
+ alert('Check-Out saved successfully.');
+};
+(async()=>{const s=await validateKitchenSession();if(!s){showKitchenLogin();return}await startKitchenAfterLogin(s)})();
+</script>
+
+<style id="hameeds-mobile-responsive-final">
+html,body{max-width:100%;overflow-x:hidden}button,input,select,textarea{touch-action:manipulation}img,svg,canvas,video{max-width:100%}
+@media(max-width:768px){html,body{width:100%!important;min-width:0!important}body{overflow-x:hidden!important}button{min-height:42px}input,select,textarea{font-size:16px!important;max-width:100%!important}.fixed{max-width:100vw!important}#notificationModal,#orderDetailsModal,#posSystemModal,#newOrderSetupModal,#historyModal{padding-left:max(6px,env(safe-area-inset-left))!important;padding-right:max(6px,env(safe-area-inset-right))!important}#notificationModal>div,#orderDetailsModal>div,#posSystemModal>div,#newOrderSetupModal>div,#historyModal>div{max-width:100vw!important}}
+@supports(padding:max(0px)){body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}}
+</style>
+
+</body>
+</html>
