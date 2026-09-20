@@ -1,340 +1,180 @@
-var __defProp = Object.defineProperty;
-var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
+// ============================================================
+// RMP POS API
+// Cloudflare Worker + Cloudflare D1
+// Database: rmp_soloutions
+// ============================================================
 
-// src/index.js
-var corsHeaders = {
+const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-RMP-API-Key, X-RMP-Staff-Token, X-Sync-Key"
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-RMP-API-Key, X-RMP-Staff-Token",
 };
+
 function json(data, status = 200) {
   return Response.json(data, { status, headers: corsHeaders });
 }
-__name(json, "json");
+
 function isAuthorized(request, env) {
   const key = request.headers.get("X-RMP-API-Key");
   return Boolean(env.RMP_API_SECRET && key && key === env.RMP_API_SECRET);
 }
-__name(isAuthorized, "isAuthorized");
-var DATA_TABLES = /* @__PURE__ */ new Set([
-  "app_settings",
-  "attendance",
-  "customer_calls",
-  "customers",
-  "email_recipients",
-  "invoices",
-  "item_description",
-  "kitchen_section_categories",
-  "kitchen_sections",
-  "menu_items",
-  "menu_schedule_category_tags",
-  "menu_schedule_group_time_slots",
-  "menu_schedule_groups",
-  "menu_schedule_item_tags",
-  "menu_schedules",
-  "modifiers",
-  "order_item_add_requests",
-  "order_items",
-  "orders",
-  "profiles",
-  "shift_closures",
-  "system_settings"
+
+
+
+// ---------- Cloudflare browser data bridge (D1 + R2) ----------
+const DATA_TABLES = new Set([
+  "app_settings","attendance","customer_calls","customers","email_recipients","invoices",
+  "item_description","kitchen_section_categories","kitchen_sections","menu_items",
+  "menu_schedule_category_tags","menu_schedule_group_time_slots","menu_schedule_groups",
+  "menu_schedule_item_tags","menu_schedules","modifiers","order_item_add_requests","order_items",
+  "orders","profiles","shift_closures","system_settings"
 ]);
-var PUBLIC_READ_TABLES = /* @__PURE__ */ new Set(["menu_items", "menu_schedules", "menu_schedule_groups", "menu_schedule_group_time_slots", "menu_schedule_category_tags", "menu_schedule_item_tags", "modifiers", "item_description", "app_settings", "kitchen_sections", "kitchen_section_categories"]);
-var CUSTOMER_BRIDGE_TABLES = /* @__PURE__ */ new Set(["customers", "orders", "order_items", "order_item_add_requests", "customer_calls", "invoices"]);
-var ident = /* @__PURE__ */ __name((x) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(x || "")) ? String(x) : null, "ident");
-function b64url(bytes) {
-  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-__name(b64url, "b64url");
-async function staffToken(env, user) {
-  const exp = Date.now() + 12 * 60 * 60 * 1e3;
-  const payload = b64url(new TextEncoder().encode(JSON.stringify({ id: user.id, email: user.email, role: user.role, exp })));
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.RMP_API_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload)));
-  return payload + "." + b64url(sig);
-}
-__name(staffToken, "staffToken");
-async function validStaff(request, env) {
-  try {
-    const tok = request.headers.get("X-RMP-Staff-Token") || "";
-    const [payload, sig] = tok.split(".");
-    if (!payload || !sig || !env.RMP_API_SECRET) return false;
-    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.RMP_API_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
-    const raw = Uint8Array.from(atob(sig.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((sig.length + 3) % 4)), (c) => c.charCodeAt(0));
-    const ok = await crypto.subtle.verify("HMAC", key, raw, new TextEncoder().encode(payload));
-    if (!ok) return false;
-    const obj = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(payload.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((payload.length + 3) % 4)), (c) => c.charCodeAt(0))));
-    return Number(obj.exp) > Date.now();
-  } catch {
-    return false;
-  }
-}
-__name(validStaff, "validStaff");
-function cleanRow(row) {
-  if (row && typeof row === "object") {
-    const x = { ...row };
-    delete x.password;
-    return x;
-  }
-  return row;
-}
-__name(cleanRow, "cleanRow");
-function parseSelectColumns(sel) {
-  if (!sel || sel === "*") return "*";
-  const cols = String(sel).split(",").map((x) => x.trim().split(/[ (]/)[0]).filter(Boolean);
-  if (!cols.length || cols.some((c) => !ident(c))) return "*";
-  return cols.join(",");
-}
-__name(parseSelectColumns, "parseSelectColumns");
+const PUBLIC_READ_TABLES = new Set(["menu_items","menu_schedules","menu_schedule_groups","menu_schedule_group_time_slots","menu_schedule_category_tags","menu_schedule_item_tags","modifiers","item_description","app_settings","kitchen_sections","kitchen_section_categories"]);
+const CUSTOMER_BRIDGE_TABLES = new Set(["customers","orders","order_items","order_item_add_requests","customer_calls","invoices"]);
+const ident = x => /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(x||"")) ? String(x) : null;
+function b64url(bytes){return btoa(String.fromCharCode(...bytes)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");}
+async function staffToken(env, user){const exp=Date.now()+12*60*60*1000;const payload=b64url(new TextEncoder().encode(JSON.stringify({id:user.id,email:user.email,role:user.role,exp})));const key=await crypto.subtle.importKey("raw",new TextEncoder().encode(env.RMP_API_SECRET),{name:"HMAC",hash:"SHA-256"},false,["sign"]);const sig=new Uint8Array(await crypto.subtle.sign("HMAC",key,new TextEncoder().encode(payload)));return payload+"."+b64url(sig);}
+async function validStaff(request,env){try{const tok=request.headers.get("X-RMP-Staff-Token")||"";const [payload,sig]=tok.split(".");if(!payload||!sig||!env.RMP_API_SECRET)return false;const key=await crypto.subtle.importKey("raw",new TextEncoder().encode(env.RMP_API_SECRET),{name:"HMAC",hash:"SHA-256"},false,["verify"]);const raw=Uint8Array.from(atob(sig.replace(/-/g,"+").replace(/_/g,"/")+"===".slice((sig.length+3)%4)),c=>c.charCodeAt(0));const ok=await crypto.subtle.verify("HMAC",key,raw,new TextEncoder().encode(payload));if(!ok)return false;const obj=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(payload.replace(/-/g,"+").replace(/_/g,"/")+"===".slice((payload.length+3)%4)),c=>c.charCodeAt(0))));return Number(obj.exp)>Date.now();}catch{return false;}}
+function cleanRow(row){if(row&&typeof row==="object"){const x={...row};delete x.password;return x}return row;}
+function parseSelectColumns(sel){if(!sel||sel==="*")return "*";const cols=String(sel).split(",").map(x=>x.trim().split(/[ (]/)[0]).filter(Boolean);if(!cols.length||cols.some(c=>!ident(c)))return "*";return cols.join(",");}
+
 function positiveInteger(value) {
   const n = Number(value);
   return Number.isInteger(n) && n > 0 ? n : null;
 }
-__name(positiveInteger, "positiveInteger");
-var index_default = {
+
+export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders });
     }
+
     try {
+      // Health
       if (url.pathname === "/" || url.pathname === "/health") {
         return json({ ok: true, service: "RMP POS API", status: "running" });
       }
+
+      // DB test
       if (url.pathname === "/api/db-test" && request.method === "GET") {
         const result = await env.DB.prepare(`
           SELECT COUNT(*) AS total_menu_items,
                  SUM(CASE WHEN image_url IS NOT NULL AND TRIM(image_url) <> '' THEN 1 ELSE 0 END) AS items_with_images
           FROM menu_items
         `).first();
+
         return json({
           ok: true,
           database: "rmp_soloutions",
           total_menu_items: result?.total_menu_items ?? 0,
-          items_with_images: result?.items_with_images ?? 0
+          items_with_images: result?.items_with_images ?? 0,
         });
       }
-      // ViZPOS -> Cloudflare D1 menu synchronization
-      // Uses SYNC_KEY and source_item_id as the stable POS identifier.
-      // D1 id remains the local auto-generated primary key.
-      if (url.pathname === "/api/sync/menu" && request.method === "GET") {
-        const key = request.headers.get("X-Sync-Key") || "";
-        if (!env.SYNC_KEY || !key || key !== env.SYNC_KEY) {
-          return json({ ok: false, error: "Unauthorized" }, 401);
-        }
-        const result = await env.DB.prepare(`
-          SELECT * FROM menu_items
-          WHERE source_item_id IS NOT NULL
-          ORDER BY source_item_id
-        `).all();
-        return json({ ok: true, count: result.results?.length ?? 0, items: result.results ?? [] });
-      }
 
-      if (url.pathname === "/api/sync/menu" && request.method === "POST") {
-        const key = request.headers.get("X-Sync-Key") || "";
-        if (!env.SYNC_KEY || !key || key !== env.SYNC_KEY) {
-          return json({ ok: false, error: "Unauthorized" }, 401);
-        }
-
-        const body = await request.json();
-        const rawItems = Array.isArray(body) ? body : Array.isArray(body.items) ? body.items : [body.item || body];
-        const results = [];
-        const errors = [];
-
-        for (const raw of rawItems) {
-          try {
-            const sourceId = Number(raw.source_item_id ?? raw.itemid);
-            const name = String(raw.name_en ?? raw.itemname ?? "").trim();
-            const category = String(raw.category ?? raw.scatename ?? "").trim();
-            const dineIn = raw.dine_in_price ?? raw.price ?? 0;
-            const takeaway = raw.takeaway_price ?? raw.takeprice ?? 0;
-
-            if (!Number.isInteger(sourceId) || sourceId <= 0) throw new Error("Invalid source_item_id");
-            if (!name) throw new Error("name_en/itemname is required");
-
-            // Only the exact @# suffix forces the item OFF.
-            // Other symbols do not change availability.
-            const forceUnavailable = /@#$/.test(name);
-
-            const existing = await env.DB.prepare(`
-              SELECT * FROM menu_items WHERE source_item_id = ? LIMIT 1
-            `).bind(sourceId).first();
-
-            if (existing) {
-              const availability = forceUnavailable ? 0 : Number(existing.is_available ?? 1);
-              await env.DB.prepare(`
-                UPDATE menu_items
-                SET name_en = ?,
-                    category = ?,
-                    dine_in_price = ?,
-                    takeaway_price = ?,
-                    is_available = ?,
-                    source_type = COALESCE(source_type, 'vizpos'),
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-              `).bind(
-                name,
-                category,
-                dineIn,
-                takeaway,
-                availability,
-                existing.id
-              ).run();
-
-              const item = await env.DB.prepare(`SELECT * FROM menu_items WHERE id = ?`).bind(existing.id).first();
-              results.push({ action: "updated", source_item_id: sourceId, id: existing.id, is_available: Number(item?.is_available ?? availability), item });
-            } else {
-              const availability = forceUnavailable ? 0 : 1;
-              const inserted = await env.DB.prepare(`
-                INSERT INTO menu_items (
-                  name_en,
-                  category,
-                  dine_in_price,
-                  takeaway_price,
-                  translations,
-                  is_popular,
-                  is_available,
-                  sold_quantity,
-                  source_type,
-                  source_item_id
-                ) VALUES (?, ?, ?, ?, '{}', 0, ?, 0, 'vizpos', ?)
-                RETURNING *
-              `).bind(
-                name,
-                category,
-                dineIn,
-                takeaway,
-                availability,
-                sourceId
-              ).first();
-
-              results.push({ action: "inserted", source_item_id: sourceId, id: inserted?.id ?? null, is_available: availability, item: inserted });
-            }
-          } catch (err) {
-            errors.push({
-              source_item_id: raw?.source_item_id ?? raw?.itemid ?? null,
-              error: err instanceof Error ? err.message : String(err)
-            });
-          }
-        }
-
-        return json({ ok: errors.length === 0, count: results.length, results, errors }, errors.length ? 207 : 200);
-      }
-
-      if ((url.pathname === "/api/sync/menu" || /^\/api\/sync\/menu\/\d+$/.test(url.pathname)) && request.method === "DELETE") {
-        const key = request.headers.get("X-Sync-Key") || "";
-        if (!env.SYNC_KEY || !key || key !== env.SYNC_KEY) {
-          return json({ ok: false, error: "Unauthorized" }, 401);
-        }
-        const body = await request.json().catch(() => ({}));
-        const pathId = url.pathname === "/api/sync/menu" ? null : url.pathname.split("/").pop();
-        const sourceId = Number(body.source_item_id ?? pathId ?? url.searchParams.get("source_item_id"));
-        if (!Number.isInteger(sourceId) || sourceId <= 0) {
-          return json({ ok: false, error: "Invalid source_item_id" }, 400);
-        }
-        const result = await env.DB.prepare(`
-          DELETE FROM menu_items WHERE source_item_id = ?
-        `).bind(sourceId).run();
-        return json({ ok: true, source_item_id: sourceId, deleted: Number(result.meta?.changes ?? 0) });
-      }
-
+      // Public menu list
       if (url.pathname === "/api/menu" && request.method === "GET") {
         const category = url.searchParams.get("category");
         const available = url.searchParams.get("available");
+
         let sql = `SELECT * FROM menu_items WHERE 1 = 1`;
         const params = [];
+
         if (category) {
           sql += ` AND category = ?`;
           params.push(category);
         }
+
         if (available === "1" || available === "true") {
           sql += ` AND is_available = 1`;
         }
+
         sql += `
           ORDER BY COALESCE(category_sort_order, 999999),
                    category,
                    COALESCE(item_sort_order, 999999),
                    id
         `;
+
         const stmt = env.DB.prepare(sql);
-        const result = params.length ? await stmt.bind(...params).all() : await stmt.all();
+        const result = params.length
+          ? await stmt.bind(...params).all()
+          : await stmt.all();
+
         return json({
           ok: true,
           count: result.results?.length ?? 0,
-          items: result.results ?? []
+          items: result.results ?? [],
         });
       }
+
+      // Public single menu item
       if (/^\/api\/menu\/\d+$/.test(url.pathname) && request.method === "GET") {
         const id = positiveInteger(url.pathname.split("/").pop());
         if (!id) return json({ ok: false, error: "Invalid menu item ID" }, 400);
+
         const item = await env.DB.prepare(`
           SELECT * FROM menu_items WHERE id = ? LIMIT 1
         `).bind(id).first();
+
         if (!item) return json({ ok: false, error: "Menu item not found" }, 404);
         return json({ ok: true, item });
       }
-      if (/^\/api\/admin\/menu\/\d+\/availability$/.test(url.pathname) && request.method === "PATCH") {
+
+      // IMPORTANT: availability route comes before generic admin menu route
+      if (
+        /^\/api\/admin\/menu\/\d+\/availability$/.test(url.pathname) &&
+        request.method === "PATCH"
+      ) {
         if (!isAuthorized(request, env)) {
           return json({ ok: false, error: "Unauthorized" }, 401);
         }
+
         const id = positiveInteger(url.pathname.split("/")[4]);
         if (!id) return json({ ok: false, error: "Invalid menu item ID" }, 400);
+
         const body = await request.json();
         if (typeof body.is_available !== "boolean") {
           return json({ ok: false, error: "is_available must be true or false" }, 400);
         }
+
         const result = await env.DB.prepare(`
           UPDATE menu_items SET is_available = ? WHERE id = ?
         `).bind(body.is_available ? 1 : 0, id).run();
+
         if (!result.meta?.changes) {
           return json({ ok: false, error: "Menu item not found" }, 404);
         }
+
         return json({ ok: true, id, is_available: body.is_available });
       }
-      if (/^\/api\/admin\/menu\/\d+$/.test(url.pathname) && request.method === "PATCH") {
+
+      // Protected generic menu update
+      if (
+        /^\/api\/admin\/menu\/\d+$/.test(url.pathname) &&
+        request.method === "PATCH"
+      ) {
         if (!isAuthorized(request, env)) {
           return json({ ok: false, error: "Unauthorized" }, 401);
         }
+
         const id = positiveInteger(url.pathname.split("/").pop());
         if (!id) return json({ ok: false, error: "Invalid menu item ID" }, 400);
+
         const body = await request.json();
         const allowedFields = [
-          "name_en",
-          "name_ms",
-          "name_en_us",
-          "name_bn",
-          "name_hi",
-          "name_ta",
-          "name_ar",
-          "name_zh",
-          "category",
-          "category_ms",
-          "category_en_us",
-          "category_bn",
-          "category_hi",
-          "category_ta",
-          "category_ar",
-          "category_zh",
-          "dine_in_price",
-          "takeaway_price",
-          "translations",
-          "image_url",
-          "kitchen_section_id",
-          "is_popular",
-          "is_available",
-          "sold_quantity",
-          "translation_status",
-          "translation_source_hash",
-          "translated_at",
-          "translation_error",
-          "category_sort_order",
-          "item_sort_order",
-          "source_type",
-          "source_item_id"
+          "name_en","name_ms","name_en_us","name_bn","name_hi","name_ta","name_ar","name_zh",
+          "category","category_ms","category_en_us","category_bn","category_hi","category_ta",
+          "category_ar","category_zh","dine_in_price","takeaway_price","translations","image_url",
+          "kitchen_section_id","is_popular","is_available","sold_quantity","translation_status",
+          "translation_source_hash","translated_at","translation_error","category_sort_order",
+          "item_sort_order","source_type","source_item_id"
         ];
+
         const updates = [];
         const values = [];
+
         for (const field of allowedFields) {
           if (Object.prototype.hasOwnProperty.call(body, field)) {
             updates.push(`${field} = ?`);
@@ -345,28 +185,39 @@ var index_default = {
             }
           }
         }
+
         if (!updates.length) {
           return json({ ok: false, error: "No valid fields supplied" }, 400);
         }
+
         values.push(id);
         const result = await env.DB.prepare(`
           UPDATE menu_items SET ${updates.join(", ")} WHERE id = ?
         `).bind(...values).run();
+
         if (!result.meta?.changes) {
           return json({ ok: false, error: "Menu item not found or not updated" }, 404);
         }
+
         const item = await env.DB.prepare(`
           SELECT * FROM menu_items WHERE id = ?
         `).bind(id).first();
+
         return json({ ok: true, item });
       }
+
+      // Staff login: creates a short-lived signed browser token. Password is never returned.
       if (url.pathname === "/api/auth/staff-login" && request.method === "POST") {
         const b = await request.json();
         const email = String(b.email || "").trim();
         const password = String(b.password || "");
+
         if (!email || !password) {
           return json({ ok: false, error: "Email and password are required" }, 400);
         }
+
+        // Fetch by email first. This avoids D1 comparison/type issues and lets us
+        // return a clean 401 for a wrong password instead of a server error.
         const user = await env.DB.prepare(`
           SELECT id, full_name, name, email, password, role, phone,
                  passport, passport_number, employment_id, joining_date,
@@ -375,143 +226,75 @@ var index_default = {
           WHERE lower(email) = lower(?)
           LIMIT 1
         `).bind(email).first();
+
         if (!user || String(user.password ?? "") !== password) {
           return json({ ok: false, error: "Invalid email or password" }, 401);
         }
+
+        // A runtime secret is required to sign browser staff sessions.
         if (!env.RMP_API_SECRET) {
           return json({ ok: false, error: "Staff session secret is not configured" }, 500);
         }
+
         const safeUser = cleanRow(user);
         const token = await staffToken(env, safeUser);
         return json({ ok: true, user: safeUser, token });
       }
       if (url.pathname === "/api/auth/customer-login" && request.method === "POST") {
-        const b = await request.json();
-        const user = await env.DB.prepare(`SELECT * FROM customers WHERE lower(email)=lower(?) AND password=? LIMIT 1`).bind(String(b.email || "").trim(), String(b.password || "")).first();
-        if (!user) return json({ ok: false, error: "Invalid email or password" }, 401);
-        return json({ ok: true, user: cleanRow(user) });
+        const b=await request.json();
+        const user=await env.DB.prepare(`SELECT * FROM customers WHERE lower(email)=lower(?) AND password=? LIMIT 1`).bind(String(b.email||"").trim(),String(b.password||"")).first();
+        if(!user)return json({ok:false,error:"Invalid email or password"},401);
+        return json({ok:true,user:cleanRow(user)});
       }
+
+      // Supabase-compatible data bridge used by the existing HTML pages.
       if (url.pathname === "/api/data" && request.method === "POST") {
-        const b = await request.json();
-        const table = ident(b.table);
-        const op = String(b.operation || "select");
-        if (!table || !DATA_TABLES.has(table)) return json({ ok: false, error: "Table not allowed" }, 400);
-        const staff = await validStaff(request, env);
-        if (!staff && op === "select" && !PUBLIC_READ_TABLES.has(table) && !CUSTOMER_BRIDGE_TABLES.has(table)) return json({ ok: false, error: "Staff login required" }, 401);
-        if (!staff && op !== "select" && !CUSTOMER_BRIDGE_TABLES.has(table)) return json({ ok: false, error: "Staff login required" }, 401);
-        const filters = Array.isArray(b.filters) ? b.filters : [];
-        const vals = [];
-        const where = [];
-        for (const f of filters) {
-          const c = ident(f.column);
-          if (!c) return json({ ok: false, error: "Invalid filter column" }, 400);
-          const o = String(f.op || "eq");
-          if (o === "eq") {
-            where.push(`${c} = ?`);
-            vals.push(f.value);
-          } else if (o === "neq") {
-            where.push(`${c} <> ?`);
-            vals.push(f.value);
-          } else if (o === "gte") {
-            where.push(`${c} >= ?`);
-            vals.push(f.value);
-          } else if (o === "lte") {
-            where.push(`${c} <= ?`);
-            vals.push(f.value);
-          } else if (o === "ilike") {
-            where.push(`lower(${c}) LIKE lower(?)`);
-            vals.push(f.value);
-          } else if (o === "in") {
-            const a = Array.isArray(f.value) ? f.value : [];
-            if (!a.length) {
-              where.push("1=0");
-            } else {
-              where.push(`${c} IN (${a.map(() => "?").join(",")})`);
-              vals.push(...a);
-            }
-          } else if (o === "is") {
-            if (f.value === null) where.push(`${c} IS NULL`);
-            else {
-              where.push(`${c} IS ?`);
-              vals.push(f.value);
-            }
-          } else if (o === "not") {
-            if (f.extra === "is" && f.value === null) where.push(`${c} IS NOT NULL`);
-            else {
-              where.push(`${c} <> ?`);
-              vals.push(f.value);
-            }
-          }
+        const b=await request.json(); const table=ident(b.table); const op=String(b.operation||"select");
+        if(!table||!DATA_TABLES.has(table))return json({ok:false,error:"Table not allowed"},400);
+        const staff=await validStaff(request,env);
+        if(!staff && op==="select" && !PUBLIC_READ_TABLES.has(table) && !CUSTOMER_BRIDGE_TABLES.has(table))return json({ok:false,error:"Staff login required"},401);
+        if(!staff && op!=="select" && !CUSTOMER_BRIDGE_TABLES.has(table))return json({ok:false,error:"Staff login required"},401);
+        const filters=Array.isArray(b.filters)?b.filters:[]; const vals=[]; const where=[];
+        for(const f of filters){const c=ident(f.column);if(!c)return json({ok:false,error:"Invalid filter column"},400);const o=String(f.op||"eq");
+          if(o==="eq"){where.push(`${c} = ?`);vals.push(f.value)} else if(o==="neq"){where.push(`${c} <> ?`);vals.push(f.value)}
+          else if(o==="gte"){where.push(`${c} >= ?`);vals.push(f.value)} else if(o==="lte"){where.push(`${c} <= ?`);vals.push(f.value)}
+          else if(o==="ilike"){where.push(`lower(${c}) LIKE lower(?)`);vals.push(f.value)}
+          else if(o==="in"){const a=Array.isArray(f.value)?f.value:[];if(!a.length){where.push("1=0")}else{where.push(`${c} IN (${a.map(()=>"?").join(",")})`);vals.push(...a)}}
+          else if(o==="is"){if(f.value===null)where.push(`${c} IS NULL`);else{where.push(`${c} IS ?`);vals.push(f.value)}}
+          else if(o==="not"){if(f.extra==="is"&&f.value===null)where.push(`${c} IS NOT NULL`);else{where.push(`${c} <> ?`);vals.push(f.value)}}
         }
-        const W = where.length ? ` WHERE ${where.join(" AND ")}` : "";
-        if (op === "select") {
-          let sql = `SELECT ${parseSelectColumns(b.select)} FROM ${table}${W}`;
-          const orders = Array.isArray(b.orders) ? b.orders : [];
-          if (orders.length) {
-            const oo = orders.map((o) => {
-              const c = ident(o.column);
-              return c ? `${c} ${o.ascending === false ? "DESC" : "ASC"}` : null;
-            }).filter(Boolean);
-            if (oo.length) sql += ` ORDER BY ${oo.join(",")}`;
-          }
-          const lim = Math.min(Math.max(Number(b.limit) || 500, 1), 2e3);
-          sql += ` LIMIT ${lim}`;
-          const r = await env.DB.prepare(sql).bind(...vals).all();
-          let rows = (r.results || []).map(cleanRow);
-          if (b.mode === "single") {
-            if (rows.length !== 1) return json({ ok: false, error: "Expected one row" }, 406);
-            return json({ ok: true, data: rows[0] });
-          }
-          if (b.mode === "maybeSingle") return json({ ok: true, data: rows[0] || null });
-          return json({ ok: true, data: rows, count: rows.length });
+        const W=where.length?` WHERE ${where.join(" AND ")}`:"";
+        if(op==="select"){
+          let sql=`SELECT ${parseSelectColumns(b.select)} FROM ${table}${W}`;
+          const orders=Array.isArray(b.orders)?b.orders:[];if(orders.length){const oo=orders.map(o=>{const c=ident(o.column);return c?`${c} ${o.ascending===false?"DESC":"ASC"}`:null}).filter(Boolean);if(oo.length)sql+=` ORDER BY ${oo.join(",")}`}
+          const lim=Math.min(Math.max(Number(b.limit)||500,1),2000);sql+=` LIMIT ${lim}`;const r=await env.DB.prepare(sql).bind(...vals).all();let rows=(r.results||[]).map(cleanRow);if(b.mode==="single"){if(rows.length!==1)return json({ok:false,error:"Expected one row"},406);return json({ok:true,data:rows[0]})}if(b.mode==="maybeSingle")return json({ok:true,data:rows[0]||null});return json({ok:true,data:rows,count:rows.length});
         }
-        const payload = Array.isArray(b.payload) ? b.payload : [b.payload || {}];
-        if (op === "insert" || op === "upsert") {
-          const out = [];
-          for (const row of payload) {
-            const keys = Object.keys(row).filter(ident);
-            if (!keys.length) continue;
-            const q = keys.map(() => "?").join(",");
-            const verb = op === "upsert" ? "INSERT OR REPLACE" : "INSERT";
-            const rr = await env.DB.prepare(`${verb} INTO ${table} (${keys.join(",")}) VALUES (${q}) RETURNING *`).bind(...keys.map((k) => typeof row[k] === "object" && row[k] !== null ? JSON.stringify(row[k]) : row[k])).first();
-            out.push(cleanRow(rr));
-          }
-          return json({ ok: true, data: b.mode === "single" ? out[0] || null : out });
+        const payload=Array.isArray(b.payload)?b.payload:[b.payload||{}];
+        if(op==="insert"||op==="upsert"){
+          const out=[];for(const row of payload){const keys=Object.keys(row).filter(ident);if(!keys.length)continue;const q=keys.map(()=>"?").join(",");const verb=op==="upsert"?"INSERT OR REPLACE":"INSERT";const rr=await env.DB.prepare(`${verb} INTO ${table} (${keys.join(",")}) VALUES (${q}) RETURNING *`).bind(...keys.map(k=>typeof row[k]==="object"&&row[k]!==null?JSON.stringify(row[k]):row[k])).first();out.push(cleanRow(rr));}return json({ok:true,data:b.mode==="single"?(out[0]||null):out});
         }
-        if (op === "update") {
-          const row = b.payload || {};
-          const keys = Object.keys(row).filter(ident);
-          if (!keys.length) return json({ ok: false, error: "No fields" }, 400);
-          const set = keys.map((k) => `${k}=?`).join(",");
-          const vv = keys.map((k) => typeof row[k] === "object" && row[k] !== null ? JSON.stringify(row[k]) : row[k]);
-          const r = await env.DB.prepare(`UPDATE ${table} SET ${set}${W} RETURNING *`).bind(...vv, ...vals).all();
-          const rows = (r.results || []).map(cleanRow);
-          return json({ ok: true, data: b.mode === "single" ? rows[0] || null : rows });
+        if(op==="update"){
+          const row=b.payload||{};const keys=Object.keys(row).filter(ident);if(!keys.length)return json({ok:false,error:"No fields"},400);const set=keys.map(k=>`${k}=?`).join(",");const vv=keys.map(k=>typeof row[k]==="object"&&row[k]!==null?JSON.stringify(row[k]):row[k]);const r=await env.DB.prepare(`UPDATE ${table} SET ${set}${W} RETURNING *`).bind(...vv,...vals).all();const rows=(r.results||[]).map(cleanRow);return json({ok:true,data:b.mode==="single"?(rows[0]||null):rows});
         }
-        if (op === "delete") {
-          const r = await env.DB.prepare(`DELETE FROM ${table}${W} RETURNING *`).bind(...vals).all();
-          return json({ ok: true, data: (r.results || []).map(cleanRow) });
-        }
-        return json({ ok: false, error: "Operation not allowed" }, 400);
+        if(op==="delete"){const r=await env.DB.prepare(`DELETE FROM ${table}${W} RETURNING *`).bind(...vals).all();return json({ok:true,data:(r.results||[]).map(cleanRow)});}
+        return json({ok:false,error:"Operation not allowed"},400);
       }
+
+      // R2 image upload/removal for Admin page.
       if (url.pathname === "/api/storage/upload" && request.method === "POST") {
-        if (!await validStaff(request, env)) return json({ ok: false, error: "Staff login required" }, 401);
-        const fd = await request.formData();
-        const file = fd.get("file");
-        let path = String(fd.get("path") || "").replace(/^\/+/, "").replace(/\.\./g, "");
-        if (!file || !path) return json({ ok: false, error: "File/path required" }, 400);
-        await env.MENU_IMAGES.put(path, file.stream(), { httpMetadata: { contentType: file.type || "application/octet-stream", cacheControl: "public, max-age=31536000, immutable" } });
-        return json({ ok: true, data: { path } });
+        if(!await validStaff(request,env))return json({ok:false,error:"Staff login required"},401);
+        const fd=await request.formData();const file=fd.get("file");let path=String(fd.get("path")||"").replace(/^\/+/,"").replace(/\.\./g,"");if(!file||!path)return json({ok:false,error:"File/path required"},400);
+        await env.MENU_IMAGES.put(path,file.stream(),{httpMetadata:{contentType:file.type||"application/octet-stream",cacheControl:"public, max-age=31536000, immutable"}});
+        return json({ok:true,data:{path}});
       }
       if (url.pathname === "/api/storage/remove" && request.method === "POST") {
-        if (!await validStaff(request, env)) return json({ ok: false, error: "Staff login required" }, 401);
-        const b = await request.json();
-        const paths = (Array.isArray(b.paths) ? b.paths : []).map((x) => String(x).replace(/^\/+/, "").replace(/\.\./g, ""));
-        if (paths.length) await env.MENU_IMAGES.delete(paths);
-        return json({ ok: true, data: { removed: paths.length } });
+        if(!await validStaff(request,env))return json({ok:false,error:"Staff login required"},401);const b=await request.json();const paths=(Array.isArray(b.paths)?b.paths:[]).map(x=>String(x).replace(/^\/+/,"").replace(/\.\./g,""));if(paths.length)await env.MENU_IMAGES.delete(paths);return json({ok:true,data:{removed:paths.length}});
       }
+
+      // Customer order creation
       if (url.pathname === "/api/customer/orders" && request.method === "POST") {
         const body = await request.json();
+
         const customerId = Number(body.customer_id);
         const customerName = String(body.customer_name || "").trim();
         const customerPhone = String(body.customer_phone || "").trim();
@@ -524,6 +307,7 @@ var index_default = {
         const totalAmount = Number(body.total_amount);
         const orderNote = body.order_note == null ? null : String(body.order_note);
         const items = Array.isArray(body.items) ? body.items : [];
+
         if (!Number.isInteger(customerId) || customerId <= 0) {
           return json({ ok: false, error: "Customer login is required." }, 400);
         }
@@ -539,33 +323,46 @@ var index_default = {
         if (!items.length) {
           return json({ ok: false, error: "Order cart is empty." }, 400);
         }
+
         const customer = await env.DB.prepare(`
           SELECT id FROM customers WHERE id = ? LIMIT 1
         `).bind(customerId).first();
+
         if (!customer) {
           return json({ ok: false, error: "Customer not found." }, 404);
         }
+
         for (const item of items) {
           const menuItemId = Number(item.menu_item_id);
           const quantity = Number(item.quantity ?? 1);
           const price = Number(item.price);
-          if (!Number.isInteger(menuItemId) || menuItemId <= 0 || !Number.isInteger(quantity) || quantity <= 0 || !Number.isFinite(price) || price < 0) {
+
+          if (
+            !Number.isInteger(menuItemId) || menuItemId <= 0 ||
+            !Number.isInteger(quantity) || quantity <= 0 ||
+            !Number.isFinite(price) || price < 0
+          ) {
             return json({ ok: false, error: "Invalid order item." }, 400);
           }
         }
-        const uniqueMenuIds = [...new Set(items.map((i) => Number(i.menu_item_id)))];
+
+        const uniqueMenuIds = [...new Set(items.map(i => Number(i.menu_item_id)))];
         const placeholders = uniqueMenuIds.map(() => "?").join(",");
+
         const menuCheck = await env.DB.prepare(`
           SELECT id FROM menu_items WHERE id IN (${placeholders})
         `).bind(...uniqueMenuIds).all();
+
         const existingIds = new Set(
-          (menuCheck.results || []).map((row) => Number(row.id))
+          (menuCheck.results || []).map(row => Number(row.id))
         );
+
         for (const id of uniqueMenuIds) {
           if (!existingIds.has(id)) {
             return json({ ok: false, error: `Menu item ${id} not found.` }, 400);
           }
         }
+
         const orderInsert = await env.DB.prepare(`
           INSERT INTO orders (
             customer_id, customer_name, customer_phone,
@@ -588,13 +385,16 @@ var index_default = {
           totalAmount,
           orderNote
         ).first();
+
         const orderId = Number(orderInsert?.id);
         if (!Number.isInteger(orderId) || orderId <= 0) {
           throw new Error("Order ID could not be created.");
         }
-        const itemStatements = items.map((item) => {
+
+        const itemStatements = items.map(item => {
           let modifiers = item.modifiers ?? [];
           if (typeof modifiers !== "string") modifiers = JSON.stringify(modifiers);
+
           return env.DB.prepare(`
             INSERT INTO order_items (
               order_id, menu_item_id, price, quantity, modifiers
@@ -608,28 +408,35 @@ var index_default = {
             modifiers
           );
         });
+
         try {
           if (itemStatements.length) await env.DB.batch(itemStatements);
         } catch (err) {
           await env.DB.prepare(`DELETE FROM orders WHERE id = ?`).bind(orderId).run();
           throw err;
         }
+
         return json({
           ok: true,
           order_id: orderId,
           status: "pending",
-          payment_status: "unpaid"
+          payment_status: "unpaid",
         }, 201);
       }
+
+      // Protected orders list
       if (url.pathname === "/api/orders" && request.method === "GET") {
         if (!isAuthorized(request, env)) {
           return json({ ok: false, error: "Unauthorized" }, 401);
         }
+
         const status = url.searchParams.get("status");
         const paymentStatus = url.searchParams.get("payment_status");
         const tableId = url.searchParams.get("table_id");
+
         let sql = `SELECT * FROM orders WHERE 1 = 1`;
         const params = [];
+
         if (status) {
           sql += ` AND status = ?`;
           params.push(status);
@@ -642,25 +449,39 @@ var index_default = {
           sql += ` AND table_id = ?`;
           params.push(tableId);
         }
+
         sql += ` ORDER BY created_at DESC, id DESC LIMIT 500`;
+
         const stmt = env.DB.prepare(sql);
-        const result = params.length ? await stmt.bind(...params).all() : await stmt.all();
+        const result = params.length
+          ? await stmt.bind(...params).all()
+          : await stmt.all();
+
         return json({
           ok: true,
           count: result.results?.length ?? 0,
-          orders: result.results ?? []
+          orders: result.results ?? [],
         });
       }
-      if (/^\/api\/orders\/\d+\/items$/.test(url.pathname) && request.method === "GET") {
+
+      // Protected order items
+      if (
+        /^\/api\/orders\/\d+\/items$/.test(url.pathname) &&
+        request.method === "GET"
+      ) {
         if (!isAuthorized(request, env)) {
           return json({ ok: false, error: "Unauthorized" }, 401);
         }
+
         const orderId = positiveInteger(url.pathname.split("/")[3]);
         if (!orderId) return json({ ok: false, error: "Invalid order ID" }, 400);
+
         const order = await env.DB.prepare(`
           SELECT id FROM orders WHERE id = ? LIMIT 1
         `).bind(orderId).first();
+
         if (!order) return json({ ok: false, error: "Order not found" }, 404);
+
         const result = await env.DB.prepare(`
           SELECT oi.*, mi.name_en, mi.category, mi.image_url
           FROM order_items oi
@@ -668,22 +489,29 @@ var index_default = {
           WHERE oi.order_id = ?
           ORDER BY oi.id
         `).bind(orderId).all();
+
         return json({
           ok: true,
           count: result.results?.length ?? 0,
-          items: result.results ?? []
+          items: result.results ?? [],
         });
       }
+
+      // Protected single order
       if (/^\/api\/orders\/\d+$/.test(url.pathname) && request.method === "GET") {
         if (!isAuthorized(request, env)) {
           return json({ ok: false, error: "Unauthorized" }, 401);
         }
+
         const orderId = positiveInteger(url.pathname.split("/").pop());
         if (!orderId) return json({ ok: false, error: "Invalid order ID" }, 400);
+
         const order = await env.DB.prepare(`
           SELECT * FROM orders WHERE id = ? LIMIT 1
         `).bind(orderId).first();
+
         if (!order) return json({ ok: false, error: "Order not found" }, 404);
+
         const items = await env.DB.prepare(`
           SELECT oi.*, mi.name_en, mi.category, mi.image_url
           FROM order_items oi
@@ -691,78 +519,68 @@ var index_default = {
           WHERE oi.order_id = ?
           ORDER BY oi.id
         `).bind(orderId).all();
+
         return json({ ok: true, order, items: items.results ?? [] });
       }
+
+      // Protected order update
       if (/^\/api\/orders\/\d+$/.test(url.pathname) && request.method === "PATCH") {
         if (!isAuthorized(request, env)) {
           return json({ ok: false, error: "Unauthorized" }, 401);
         }
+
         const orderId = positiveInteger(url.pathname.split("/").pop());
         if (!orderId) return json({ ok: false, error: "Invalid order ID" }, 400);
+
         const body = await request.json();
         const allowedFields = [
-          "status",
-          "payment_status",
-          "customer_name",
-          "customer_phone",
-          "section",
-          "table_id",
-          "table_no",
-          "subtotal",
-          "sst_tax",
-          "total_amount",
-          "decline_reason",
-          "order_note",
-          "accepted_by_id",
-          "accepted_by_name",
-          "accepted_by_email",
-          "accepted_by_role",
-          "accepted_at",
-          "declined_by_id",
-          "declined_by_name",
-          "declined_by_email",
-          "declined_by_role",
-          "declined_at",
-          "cancelled_by_id",
-          "cancelled_by_name",
-          "cancelled_by_email",
-          "cancelled_by_role",
-          "cancelled_at",
+          "status","payment_status","customer_name","customer_phone","section",
+          "table_id","table_no","subtotal","sst_tax","total_amount","decline_reason",
+          "order_note","accepted_by_id","accepted_by_name","accepted_by_email",
+          "accepted_by_role","accepted_at","declined_by_id","declined_by_name",
+          "declined_by_email","declined_by_role","declined_at","cancelled_by_id",
+          "cancelled_by_name","cancelled_by_email","cancelled_by_role","cancelled_at",
           "cancel_reason"
         ];
+
         const updates = [];
         const values = [];
+
         for (const field of allowedFields) {
           if (Object.prototype.hasOwnProperty.call(body, field)) {
             updates.push(`${field} = ?`);
             values.push(body[field]);
           }
         }
+
         if (!updates.length) {
           return json({ ok: false, error: "No valid fields supplied" }, 400);
         }
+
         values.push(orderId);
+
         const result = await env.DB.prepare(`
           UPDATE orders SET ${updates.join(", ")} WHERE id = ?
         `).bind(...values).run();
+
         if (!result.meta?.changes) {
           return json({ ok: false, error: "Order not found or not updated" }, 404);
         }
+
         const order = await env.DB.prepare(`
           SELECT * FROM orders WHERE id = ?
         `).bind(orderId).first();
+
         return json({ ok: true, order });
       }
+
       return json({ ok: false, error: "Route not found" }, 404);
+
     } catch (error) {
       return json({
         ok: false,
-        error: error instanceof Error ? error.message : String(error)
+        error: error instanceof Error ? error.message : String(error),
       }, 500);
     }
-  }
+  },
 };
-export {
-  index_default as default
-};
-//# sourceMappingURL=index.js.map
