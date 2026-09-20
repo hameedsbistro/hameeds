@@ -680,8 +680,12 @@ window.cloudflareDB={createClient(){return {from:t=>new Q(t),storage,auth,channe
 
             <form id="loginForm" onsubmit="handleLogin(event)" class="space-y-4">
                 <div>
+                    <label class="block text-xs font-medium text-gray-700 mb-1">Email / Username</label>
+                    <input type="email" id="loginEmail" required autocomplete="username" class="w-full border px-3 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="staff@example.com">
+                </div>
+                <div>
                     <label class="block text-xs font-medium text-gray-700 mb-1">Password</label>
-                    <input type="password" id="loginPassword" required class="w-full border px-3 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="••••••••">
+                    <input type="password" id="loginPassword" required autocomplete="current-password" class="w-full border px-3 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="••••••••">
                 </div>
                 <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl text-sm font-semibold shadow transition">
                     Login to Panel
@@ -1430,36 +1434,38 @@ async function enforceMenuAvailabilityMarkers(items, client){
             event.preventDefault();
             ensureAlertAudioReady();
             try { if ('speechSynthesis' in window) window.speechSynthesis.getVoices(); } catch (e) {}
+            const email = document.getElementById('loginEmail').value.trim();
             const password = document.getElementById('loginPassword').value.trim();
             const errorDiv = document.getElementById('loginError');
 
             errorDiv.classList.add('hidden');
 
+            // Staff API authentication requires both email and password.
+            // The previous password-only lookup called /api/data without a staff token,
+            // which caused repeated 401 Unauthorized errors after the Cloudflare migration.
             const { data, error } = await cloudDB
                 .from('profiles')
                 .select('*')
+                .eq('email', email)
                 .eq('password', password)
-                .limit(2);
+                .maybeSingle();
 
             const allowedRoles = ['admin', 'manager', 'cashier', 'staff'];
-            const matches = (Array.isArray(data) ? data : []).filter(row =>
-                allowedRoles.includes(String(row?.role || '').trim().toLowerCase())
-            );
+            const roleAllowed = data && allowedRoles.includes(String(data?.role || '').trim().toLowerCase());
 
-            if (error || matches.length !== 1) {
-                errorDiv.innerText = matches.length > 1
-                    ? "This password is used by more than one staff account. Please set a unique password in Admin."
-                    : "Invalid password or unauthorized role.";
+            if (error || !data || !roleAllowed) {
+                errorDiv.innerText = "Invalid email/password or unauthorized role.";
                 errorDiv.classList.remove('hidden');
                 return;
             }
 
-            const user = matches[0];
+            const user = data;
             const normalizedRole = String(user.role || '').trim().toLowerCase();
             user.role = user.role || normalizedRole;
             localStorage.setItem('cashier_session', JSON.stringify(user));
             ensureAlertAudioReady();
             applyUserSession(user);
+            setTimeout(refreshCashierCurrentShiftHeader,300);
         }
 
         function applyUserSession(data) {
@@ -1553,6 +1559,7 @@ async function enforceMenuAvailabilityMarkers(items, client){
         }
 
         async function loadPendingOrders() {
+            if (!token()) return;
             const container = document.getElementById('pendingOrdersContainer');
             container.innerHTML = '<p class="text-gray-500 text-sm">Loading current orders...</p>';
 
@@ -2045,6 +2052,7 @@ openPosSystemModalWithOrder(orderId, totalAmount);
         }
 
         async function fetchIncomingOrders(shouldAlert = false) {
+            if (!token()) return;
             const { data, error } = await cloudDB
                 .from('orders')
                 .select('*')
@@ -5058,6 +5066,7 @@ window.openCloseReportPrintWindow = function(type,date,shiftNo,snapshot,user){
   }
 
   async function loadPendingAddRequests(shouldAlert=false){
+    if(!token()) return [];
     const {data,error}=await cloudDB.from('order_item_add_requests')
       .select('*').eq('status','pending').order('created_at',{ascending:false});
     if(error){console.warn('Add-item request load:',error.message);return [];}
@@ -6519,6 +6528,7 @@ async function confirmPosTableChange(){
 
 <script id="cashier-current-shift-header-final">
 async function refreshCashierCurrentShiftHeader(){
+  if(!token()) return;
   const el=document.getElementById('cashierCurrentShiftNo');
   if(!el)return;
 
@@ -6553,7 +6563,7 @@ async function refreshCashierCurrentShiftHeader(){
 
 // Show the current shift immediately after page/session load.
 document.addEventListener('DOMContentLoaded',()=>{
-  setTimeout(refreshCashierCurrentShiftHeader,300);
+  if(token()) setTimeout(refreshCashierCurrentShiftHeader,300);
 });
 
 // Keep the header updated after every Shift/EOD Close.
@@ -6684,7 +6694,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   };
 
   async function loadLatestPendingCustomerCall(){
-    if(pollBusy)return;
+    if(!token() || pollBusy)return;
     pollBusy=true;
     try{
       const {data,error}=await cloudDB.from('customer_calls')
