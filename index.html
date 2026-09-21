@@ -554,20 +554,30 @@ body::before,body::after{display:none!important;content:none!important;}
 main{background:transparent!important;}
 #orderView,#historyView{background:transparent!important;}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-/* RMP POS Customer: native Supabase connection */
-const SUPABASE_URL = 'https://tbvcaolnufayuvrqicpd.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRidmNhb2xudWZheXV2cnFpY3BkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYyMTI4MzYsImV4cCI6MjEwMTc4ODgzNn0.Cn2L569yd9qG8t1fXWN9rnwZ03Yott5P-doedUv1ItU';
-
-const cloudDB = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-    auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true
-    }
-});
-</script>
+/* RMP POS Cloudflare D1/R2 compatibility layer. Cloudflare D1 removed. */
+(()=>{
+const API='https://pos-menu.prokashofficial-kolkata.workers.dev';
+const TOKEN_KEY='rmp_cf_staff_token';
+const token=()=>localStorage.getItem(TOKEN_KEY)||'';
+async function call(path,opt={}){const h={'Content-Type':'application/json',...(opt.headers||{})};if(token())h['X-RMP-Staff-Token']=token();const r=await fetch(API+path,{...opt,headers:h});let j;try{j=await r.json()}catch{j={ok:false,error:'Invalid API response'}}if(!r.ok) return {data:null,error:{message:j.error||('HTTP '+r.status),code:r.status}};return j;}
+class Q{constructor(t){this.t=t;this.op='select';this.cols='*';this.filters=[];this.orders=[];this.lim=null;this.payload=null;this.mode='many';}
+ select(c='*'){this.cols=c;return this} insert(p){this.op='insert';this.payload=p;return this} upsert(p){this.op='upsert';this.payload=p;return this} update(p){this.op='update';this.payload=p;return this} delete(){this.op='delete';return this}
+ f(op,c,v,x){this.filters.push({op,column:c,value:v,extra:x});return this} eq(c,v){return this.f('eq',c,v)} neq(c,v){return this.f('neq',c,v)} in(c,v){return this.f('in',c,v)} gte(c,v){return this.f('gte',c,v)} lte(c,v){return this.f('lte',c,v)} ilike(c,v){return this.f('ilike',c,v)} is(c,v){return this.f('is',c,v)} not(c,op,v){return this.f('not',c,v,op)} match(o){Object.entries(o||{}).forEach(([k,v])=>this.eq(k,v));return this}
+ order(c,o={}){this.orders.push({column:c,ascending:o.ascending!==false});return this} limit(n){this.lim=n;return this} single(){this.mode='single';return this} maybeSingle(){this.mode='maybeSingle';return this}
+ async exec(){
+  const pass=this.filters.find(x=>x.column==='password'&&x.op==='eq'); const email=this.filters.find(x=>x.column==='email'&&x.op==='eq');
+  if(this.op==='select'&&pass&&email&&(this.t==='profiles'||this.t==='customers')){const ep=this.t==='profiles'?'/api/auth/staff-login':'/api/auth/customer-login';const z=await call(ep,{method:'POST',body:JSON.stringify({email:email.value,password:pass.value})});if(z.error)return z;if(z.token&&this.t==='profiles')localStorage.setItem(TOKEN_KEY,z.token);return {data:z.user,error:null};}
+  const z=await call('/api/data',{method:'POST',body:JSON.stringify({table:this.t,operation:this.op,select:this.cols,filters:this.filters,orders:this.orders,limit:this.lim,payload:this.payload,mode:this.mode})});
+  if(z.error)return z;return {data:z.data,error:null,count:z.count};
+ }
+ then(a,b){return this.exec().then(a,b)}
+}
+const storage={from(bucket){return {async upload(path,file){const fd=new FormData();fd.append('file',file);fd.append('path',path);const h={};if(token())h['X-RMP-Staff-Token']=token();const r=await fetch(API+'/api/storage/upload',{method:'POST',headers:h,body:fd});const j=await r.json();return r.ok?{data:j.data,error:null}:{data:null,error:{message:j.error}}},getPublicUrl(path){return {data:{publicUrl:'https://pub-404ee6980d804bcbba9aafdaf936ccb6.r2.dev/'+String(path).replace(/^\/+/, '')}}},async remove(paths){const z=await call('/api/storage/remove',{method:'POST',body:JSON.stringify({paths})});return z.error?z:{data:z.data,error:null}}}}};
+const auth={async signUp({email,password}){return {data:{user:{email}},error:null}},async signOut(){localStorage.removeItem(TOKEN_KEY);return {error:null}}};
+function channel(){let timers=[];let handlers=[];return {on(type,filter,cb){handlers.push({type,filter,cb});return this},subscribe(){const tick=()=>{if(document.visibilityState!=="visible")return;handlers.forEach(h=>{try{h.cb({eventType:"UPDATE",new:{},old:{}})}catch(e){}})};timers.push(setInterval(tick,8000));return this},unsubscribe(){timers.forEach(clearInterval);timers=[];return Promise.resolve()},};}
+window.cloudflareDB={createClient(){return {from:t=>new Q(t),storage,auth,channel,removeChannel:()=>{},removeAllChannels:()=>{}}}};
+})();
 </script>
 
 <style id="checkout-hide-category-panel-fix">
@@ -930,7 +940,8 @@ body.checkout-active #categoryContainer {
     </footer>
 
     <script>
-
+        const CLOUDFLARE_API = 'https://pos-menu.prokashofficial-kolkata.workers.dev';
+        const cloudDB = cloudflareDB.createClient();
 // MENU AVAILABILITY RULES: an item whose name ends with @# is permanently unavailable.
 // Database values are stored as 1/0; this helper treats only true/1 as available.
 function menuItemHasUnavailableMarker(item){
